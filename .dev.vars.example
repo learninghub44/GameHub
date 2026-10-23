@@ -1,0 +1,9 @@
+SUPABASE_URL=https://your-development-project.supabase.co
+SUPABASE_ANON_KEY=your-development-project-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-development-project-service-role-key
+PAYSTACK_SECRET_KEY=your-paystack-test-secret-key
+GAMEHUB_ORIGIN=http://localhost:5173
+LIVEKIT_URL=
+LIVEKIT_API_KEY=
+LIVEKIT_API_SECRET=
+MARKETPLACE_PURCHASES_ENABLED=false

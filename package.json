@@ -1,0 +1,23 @@
+{
+  "name": "gamehub-africa",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "dev:pages": "wrangler pages dev dist --port 8788",
+    "dev:full": "npm run build && concurrently -k -n web,pages \"npm:dev\" \"npm:dev:pages\"",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.58.0",
+    "livekit-client": "^2.23.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "vite": "^7.1.7",
+    "wrangler": "^4.108.0"
+  }
+}
