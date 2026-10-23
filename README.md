@@ -4,8 +4,9 @@ GameHub Africa is a mobile-first gaming community application built with vanilla
 
 ## Included workflows
 
-- Public landing, player/game/community/live/tournament/marketplace discovery, and About, Terms, Privacy and Community Guidelines pages.
-- Supabase email/password authentication, Google OAuth entry, password recovery and onboarding with unique usernames.
+- Public landing, player/game/community/live/tournament/marketplace discovery, shareable profile/community/team/tournament routes, and About, Terms, Privacy and Community Guidelines pages.
+- Supabase email/password authentication, Google OAuth with PKCE, email verification/resend, password recovery, persistent sessions and onboarding with unique usernames.
+- Creator Flyer Studio with editable profile/community/team/tournament/event/achievement designs, 1080×1920 Status, 1080×1080 square and 1920×1080 landscape PNG export, plus WhatsApp/native link sharing.
 - Editable profiles, avatars, profile banners, free avatar accents and verified-purchase profile frames, privacy settings, gamer preferences, player discovery, follows, friend requests, blocks and reports.
 - Community creation, membership, posts and comments; teams, captain invitations and team-based tournament registration.
 - Stream submissions, game filtering/search, creator follows, moderator review, YouTube/Twitch embeds, GameHub live chat and moderation.
@@ -21,18 +22,27 @@ GameHub Africa is a mobile-first gaming community application built with vanilla
 
 Supabase PostgreSQL SQL migrations are the schema and migration source of truth. The schema uses Supabase Auth identities, RLS, Storage policies, Realtime publication and PostgreSQL security-definer functions/triggers; introducing Prisma migrations would create a second writer for that schema and risk desynchronizing those Supabase-specific features. The Cloudflare Pages Functions also use the Supabase REST/Auth APIs and do not maintain a long-lived PostgreSQL connection, so a Prisma client/adapter would add complexity without improving this runtime.
 
-Apply `supabase/migrations/202610220001_initial_schema.sql`, then `202610220002_workflows.sql`, `202610220003_public_discovery.sql`, `202610220004_voice_calls.sql`, `202610220005_support_center.sql`, `202610220006_profile_cosmetics.sql` and `202610220007_public_sharing.sql` to a development database in that order. Review each migration before applying it to production. The SQL files are the version-controlled migration history; there are no Prisma migrations and no automatic production schema changes.
+Apply `supabase/migrations/202610220001_initial_schema.sql`, then `202610220002_workflows.sql`, `202610220003_public_discovery.sql`, `202610220004_voice_calls.sql`, `202610220005_support_center.sql`, `202610220006_profile_cosmetics.sql`, `202610220007_public_sharing.sql` and `202610230001_auth_profile_repair.sql` to a development database in that order. Review each migration before applying it to production. The SQL files are the version-controlled migration history; there are no Prisma migrations and no automatic production schema changes.
 
 ## Local development
 
 Requirements: Node.js 20.19+ or 22.12+. `npm install` installs Vite, Cloudflare Wrangler and the process runner.
 
-1. Use a dedicated Supabase **development** project. In the Supabase SQL Editor, apply all seven migrations above in order. Migration 007 adds opaque share codes and public/private team visibility for public detail links. Do not run development tests or resets against production.
-2. Configure a LiveKit project (Cloud or a maintained self-hosted deployment), then copy `.env.example` to `.env.local` and set `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` and `VITE_LIVEKIT_URL`. The Supabase values and LiveKit WebSocket URL are public browser values. Do not put service-role, LiveKit API secrets or payment secrets here.
+1. Use a dedicated Supabase **development** project. In the Supabase SQL Editor, apply all eight migrations above in order. Migration 007 adds opaque share codes and public/private team visibility for public detail links; migration 008 adds idempotent repair for authenticated accounts missing their profile row. Do not run development tests or resets against production.
+2. Configure a LiveKit project (Cloud or a maintained self-hosted deployment), then copy `.env.example` to `.env.local` and set `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_LIVEKIT_URL` as needed, and `VITE_PUBLIC_SITE_URL=https://drivenwave.site`. Supabase publishable/anon keys, the LiveKit WebSocket URL and the public site URL are browser values. Never put service-role, LiveKit API secrets or payment secrets here.
 3. Copy `.dev.vars.example` to `.dev.vars` and set the server-side values below. Keep the real file private; it is git-ignored.
 4. Run `npm install`, then `npm run dev:full`. This builds the frontend, starts Vite with hot reload on `http://localhost:5173`, starts local Cloudflare Pages Functions on port 8788, and proxies `/api` calls to the functions server. Stop both with Ctrl+C. Run `npm test` and `npm run build` for validation.
 
 The frontend-only `npm run dev` command also works, but payment/account Pages Functions require the Pages server (`npm run dev:pages`) and a prior build. `npm run preview` previews only the built frontend.
+
+### Production authentication and social previews
+
+- Configure Supabase **Authentication → URL Configuration → Site URL** as `https://drivenwave.site`. Add `https://drivenwave.site/**` under the allowed redirect URLs. For local development, also allow `http://localhost:5173/**` and `http://127.0.0.1:5173/**`. The browser uses those localhost redirects only on those local hosts; other hosts use the configured public site URL.
+- Auth redirects use `https://drivenwave.site/?auth=callback&flow=oauth` for Google, `...?flow=verify` for email confirmation and `...?flow=recovery` for password recovery. The SPA uses Supabase Auth PKCE and removes callback parameters after session processing. Deploy `VITE_PUBLIC_SITE_URL=https://drivenwave.site` as a Cloudflare Pages **build** variable and rebuild.
+- In Supabase **Authentication → Sign In / Providers → Google**, enable Google and use the exact callback URI shown by that Supabase project's provider setup. Add that exact `https://<project-ref>.supabase.co/auth/v1/callback` value to Google Cloud Console → OAuth client → Authorized redirect URIs. The actual project reference is deliberately not guessed; copy the URI shown in the project's Supabase dashboard.
+- Supabase **Authentication → SMTP Settings** must have an enabled, verified mail provider and valid sender credentials for reliable production verification and recovery delivery. Keep the email confirmation/recovery templates' action links based on Supabase `{{ .ConfirmationURL }}` so Supabase honors the allowlisted redirect URL. Provider credentials and live email delivery cannot be verified from source code.
+- The Cloudflare Pages catch-all function adds crawler-readable Open Graph/Twitter metadata for public share URLs using the project's anonymous Supabase REST permissions. Pages Functions need runtime `SUPABASE_URL` and `SUPABASE_ANON_KEY`; these are already the documented public server integration values. Do not configure a service-role key for metadata. The default preview artwork is `public/drivenwave-social.png`; a public profile may use its public avatar.
+- Social networks can cache previews. Allow a few minutes for the function cache and longer for WhatsApp's own preview cache after publishing or changing details.
 
 ### Support center, legal documents and privacy
 
@@ -95,7 +105,7 @@ The simplest supported workflow is the dedicated remote development Supabase pro
 - Set `VITE_LIVEKIT_URL` as a Pages build variable to the matching LiveKit secure WebSocket URL. Keep the API key/secret out of `VITE_*` variables.
 - Set the Cloudflare Pages server-side variable `MARKETPLACE_PURCHASES_ENABLED` to `false` (or leave it unset). This disables only new marketplace checkout; it does not turn off unrelated services or existing payment verification/webhooks. The marketplace UI remains available and reports checkout status on an attempted purchase.
 - Configure Paystack's webhook URL as `https://<your-domain>/api/payments/webhook`.
-- Configure Supabase Auth redirect origins and apply all seven reviewed migrations before publishing the frontend.
+- Configure Supabase Auth redirect origins and apply all eight reviewed migrations before publishing the frontend.
 
 Never expose `SUPABASE_SERVICE_ROLE_KEY`, `PAYSTACK_SECRET_KEY`, or `LIVEKIT_API_SECRET` to browser code or commit them. Marketplace checkout is disabled unless the server-side `MARKETPLACE_PURCHASES_ENABLED` value is exactly `true`. Keep it unset or `false` until marketplace terms/refunds and production payment configuration are ready. Payment verification and webhook handling remain active for previously initialized transactions; this gate only blocks creation of new marketplace checkout sessions.
 

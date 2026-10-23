@@ -1,6 +1,9 @@
 import { isSupabaseConfigured, supabase } from "./lib/supabase.js";
 import { normalizeUsername, safeExternalUrl, streamDetails, validateUsername } from "./lib/validation.js";
 import { describeError } from "./lib/errors.js";
+import { canvasToPng, drawFlyer, FLYER_FORMATS, FLYER_TYPES, loadFlyerAvatar } from "./lib/flyers.js";
+import { getAuthRedirectUrl, getPublicSiteUrl } from "./lib/site-url.js";
+import { whatsappShareUrl } from "./lib/sharing.js";
 
 const app = document.querySelector("#app");
 const announcer = document.querySelector("#announcer");
@@ -19,6 +22,7 @@ let activeLiveKitTrack = null;
 let activeCallNames = new Map();
 let globalCallAlertsChannel = null;
 const liveKitServerUrl = import.meta.env.VITE_LIVEKIT_URL || "";
+const configuredPublicSiteUrl = import.meta.env.VITE_PUBLIC_SITE_URL || "";
 const missedCallTimers = new Map();
 const profileCosmetics = [
   { key: "classic", label: "Classic · free" },
@@ -47,6 +51,7 @@ const icons = {
   teams: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M2 20a6 6 0 0 1 12 0m1-4a5 5 0 0 1 7 4"/></svg>',
   marketplace: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16l-1 12H5L4 8Zm4 0a4 4 0 1 1 8 0"/></svg>',
   calls: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3H4a1 1 0 0 0-1 1c0 9.4 7.6 17 17 17a1 1 0 0 0 1-1v-3l-5-2-2 3a14 14 0 0 1-5-3l-3-5 3-2-2-5Z"/></svg>',
+  flyers: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8m-8 4h5"/></svg>',
   notifications: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9m-8 12h4"/></svg>',
   settings: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.7-.7a8 8 0 0 1-1.6.9L16 20h-3l-.3-1.9a8 8 0 0 1-1.6-.9l-1.7.7L8 15.5l1.4-1.1a8 8 0 0 1 0-1.8L8 11.5l1.4-2.4 1.7.7a8 8 0 0 1 1.6-.9L13 7h3l.3 1.9a8 8 0 0 1 1.6.9l1.7-.7 1.4 2.4-1.4 1.1a8 8 0 0 1-.2 2.4Z"/></svg>',
   profile: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>',
@@ -82,11 +87,50 @@ function slugify(value) {
 }
 
 function publicShareUrl(path) {
-  return new URL(path, window.location.origin).href;
+  return new URL(path, getPublicSiteUrl(configuredPublicSiteUrl)).href;
+}
+
+function authCallbackUrl(flow) {
+  return getAuthRedirectUrl(window.location, configuredPublicSiteUrl, flow);
+}
+
+function authCallbackDetails() {
+  const query = new URLSearchParams(window.location.search);
+  const hash = new URLSearchParams(window.location.hash.slice(1));
+  return {
+    flow: query.get("flow") || "",
+    isCallback: query.get("auth") === "callback" || query.has("code") || query.has("error") || hash.has("error"),
+    error: query.get("error") || hash.get("error") || query.get("error_code") || hash.get("error_code") || "",
+  };
+}
+
+function clearAuthCallbackUrl() {
+  const url = new URL(window.location.href);
+  const hashParameters = new URLSearchParams(url.hash.slice(1));
+  const shouldClear = url.searchParams.has("auth") || url.searchParams.has("code")
+    || url.searchParams.has("error") || hashParameters.has("access_token")
+    || hashParameters.has("refresh_token") || hashParameters.has("error");
+  if (shouldClear) {
+    const hashIsRoute = url.hash.startsWith("#") && !url.hash.slice(1).includes("=") && !url.hash.slice(1).includes("&");
+    window.history.replaceState({}, "", `${url.pathname}${hashIsRoute ? url.hash : ""}`);
+  }
+}
+
+function authCallbackErrorMessage(error) {
+  if (["access_denied", "user_cancelled", "provider_cancelled"].includes(error)) {
+    return "Google sign-in was cancelled. You can try again whenever you’re ready.";
+  }
+  if (["otp_expired", "access_token_expired", "invalid_grant"].includes(error)) {
+    return "This sign-in or recovery link has expired or was already used. Request a new link and try again.";
+  }
+  if (error) return "Authentication could not be completed. Check the link or try signing in again.";
+  return "";
 }
 
 function shareActions(url, title, message) {
-  return `<div class="share-actions" data-share-url="${escapeHtml(url)}" data-share-title="${escapeHtml(title)}" data-share-message="${escapeHtml(message)}"><button class="button secondary compact" type="button" data-share-native>Share</button><button class="button secondary compact" type="button" data-share-whatsapp>WhatsApp</button><button class="text-button" type="button" data-share-copy>Copy link</button><p class="share-feedback" role="status" aria-live="polite" hidden></p></div>`;
+  const brandTitle = title.replace(/on GameHub Africa$/i, "on DrivenWave");
+  const brandMessage = message.replaceAll("GameHub Africa", "DrivenWave");
+  return `<div class="share-actions" data-share-url="${escapeHtml(url)}" data-share-title="${escapeHtml(brandTitle)}" data-share-message="${escapeHtml(brandMessage)}"><button class="button secondary compact" type="button" data-share-native>Share</button><button class="button secondary compact" type="button" data-share-whatsapp>WhatsApp</button><button class="text-button" type="button" data-share-copy>Copy link</button>${currentUser ? `<button class="text-button" type="button" data-create-flyer>Make flyer</button>` : `<a class="text-button" href="#register">Sign in to make a flyer</a>`}<p class="share-feedback" role="status" aria-live="polite" hidden></p></div>`;
 }
 
 function bindShareActions(container) {
@@ -115,13 +159,23 @@ function bindShareActions(container) {
   container.querySelectorAll("[data-share-whatsapp]").forEach((button) => button.addEventListener("click", () => {
     const actions = button.closest(".share-actions");
     const url = actions.dataset.shareUrl;
-    const text = `${actions.dataset.shareMessage}\n${url}`;
-    const opened = window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener,noreferrer");
+    const mobile = /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+    const opened = window.open(whatsappShareUrl(actions.dataset.shareMessage, url, mobile), "_blank");
+    if (opened) opened.opener = null;
     const feedback = actions.querySelector(".share-feedback");
     feedback.textContent = opened
       ? "WhatsApp opened. Review the message and press Send there."
       : "Your browser blocked WhatsApp. Copy the link and share it from WhatsApp.";
     feedback.hidden = false;
+  }));
+  container.querySelectorAll("[data-create-flyer]").forEach((button) => button.addEventListener("click", () => {
+    const actions = button.closest(".share-actions");
+    sessionStorage.setItem("drivenwave-flyer-prefill", JSON.stringify({
+      title: actions.dataset.shareTitle.replace(/\s+on GameHub Africa$/i, ""),
+      description: actions.dataset.shareMessage,
+      shareUrl: actions.dataset.shareUrl,
+    }));
+    navigateToAppPage("flyers");
   }));
   container.querySelectorAll("[data-share-native]").forEach((button) => button.addEventListener("click", async () => {
     const actions = button.closest(".share-actions");
@@ -183,10 +237,11 @@ function renderAuth() {
           <div class="divider"><span>or continue with email</span></div>
           <form id="auth-form">
             <label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required />
-            <label for="password">Password</label><div class="password-control"><input id="password" name="password" type="password" autocomplete="current-password" minlength="8" placeholder="At least 8 characters" required /><button class="text-button" type="button" data-action="toggle-password" aria-controls="password" aria-pressed="false">Show</button></div>
+            <label for="password">Password</label><div class="password-control"><input id="password" name="password" type="password" autocomplete="current-password" minlength="8" placeholder="At least 8 characters" aria-describedby="password-help" required /><button class="text-button" type="button" data-action="toggle-password" aria-controls="password" aria-pressed="false">Show</button></div><small id="password-help" class="muted-small">Use at least 8 characters.</small>
             <div id="password-confirmation" hidden><label for="confirm-password">Confirm password</label><div class="password-control"><input id="confirm-password" name="confirm_password" type="password" autocomplete="new-password" minlength="8" placeholder="Enter your password again" /><button class="text-button" type="button" data-action="toggle-password" aria-controls="confirm-password" aria-pressed="false">Show</button></div></div>
             <button class="button primary full" id="auth-submit" type="submit">Continue with email</button>
           </form>
+          <button class="text-button resend-verification" type="button" data-action="resend-verification" hidden>Resend verification email</button>
           <div class="auth-links"><button class="text-button" type="button" data-action="toggle-auth">New here? Create account</button><button class="text-button" type="button" data-action="reset-password">Forgot password?</button></div>
           <p class="legal">By continuing, you agree to our <a href="#terms">Terms</a> and <a href="#privacy">Privacy Policy</a>.</p>
           <a class="public-return" href="#home">Explore GameHub Africa</a>
@@ -213,13 +268,18 @@ function bindAuthForm() {
       document.querySelector("#confirm-password").focus();
       return;
     }
+    if (isSignUp && password.length < 8) {
+      setNotice(notice, "Choose a password with at least 8 characters.");
+      document.querySelector("#password").focus();
+      return;
+    }
     submit.disabled = true;
     submit.textContent = isSignUp ? "Creating account…" : "Signing in…";
     setNotice(notice, "");
     let result;
     try {
       result = isSignUp
-        ? await supabase.auth.signUp({ email, password, options: { emailRedirectTo: window.location.href } })
+        ? await supabase.auth.signUp({ email, password, options: { emailRedirectTo: authCallbackUrl("verify") } })
         : await supabase.auth.signInWithPassword({ email, password });
     } catch (error) {
       result = { error };
@@ -231,19 +291,69 @@ function bindAuthForm() {
       return;
     }
     if (isSignUp && !result.data.session) {
+      document.querySelector('[data-action="resend-verification"]').hidden = false;
+      sessionStorage.setItem("drivenwave-verification-email", email);
       setNotice(notice, "Check your inbox for a verification link, then return here to sign in.", "success");
     }
   });
 }
 
 function authErrorMessage(error) {
+  const message = String(error?.message || "");
+  if (/invalid login credentials/i.test(message)) return "That email and password combination was not recognized. Check them and try again.";
+  if (/email not confirmed/i.test(message)) return "Please verify your email using the link we sent before signing in.";
+  if (/already registered/i.test(message)) return "An account already exists for this email. Try signing in instead.";
+  if (/rate limit|too many requests/i.test(message)) return "Too many attempts. Please wait a little and try again.";
+  if (/weak password|password.*(too short|not strong enough)/i.test(message)) return "Choose a stronger password with at least 8 characters and follow any additional requirements shown by the sign-up form.";
+  if (/invalid email|email.*invalid/i.test(message)) return "Enter a valid email address and try again.";
   const presentation = describeError(error);
   if (presentation.category !== "INPUT") return `${presentation.category}: ${presentation.message}`;
-  if (/invalid login credentials/i.test(error.message)) return "That email and password combination was not recognized. Check them and try again.";
-  if (/email not confirmed/i.test(error.message)) return "Please verify your email using the link we sent before signing in.";
-  if (/already registered/i.test(error.message)) return "An account already exists for this email. Try signing in instead.";
-  if (/rate limit|too many requests/i.test(error.message)) return "Too many attempts. Please wait a little and try again.";
   return presentation.message;
+}
+
+function renderPasswordRecovery() {
+  app.innerHTML = `<main class="onboarding-wrap"><section class="onboarding-card"><p class="eyebrow">ACCOUNT SECURITY</p><h1>Choose a new password.</h1><p class="muted">Use at least 8 characters for your new password.</p><div id="recovery-notice" class="notice" role="alert" hidden></div><form id="recovery-form"><label for="new-password">New password</label><div class="password-control"><input id="new-password" type="password" minlength="8" autocomplete="new-password" required /><button class="text-button" type="button" data-action="toggle-password" aria-controls="new-password" aria-pressed="false">Show</button></div><label for="confirm-password">Confirm new password</label><div class="password-control"><input id="confirm-password" type="password" minlength="8" autocomplete="new-password" required /><button class="text-button" type="button" data-action="toggle-password" aria-controls="confirm-password" aria-pressed="false">Show</button></div><button class="button primary full" type="submit">Update password</button></form></section></main>`;
+  document.querySelector("#recovery-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const password = document.querySelector("#new-password").value;
+    const confirmation = document.querySelector("#confirm-password").value;
+    const notice = document.querySelector("#recovery-notice");
+    if (password !== confirmation) {
+      setNotice(notice, "The passwords don’t match.");
+      document.querySelector("#confirm-password").focus();
+      return;
+    }
+    if (password.length < 8) {
+      setNotice(notice, "Choose a password with at least 8 characters.");
+      document.querySelector("#new-password").focus();
+      return;
+    }
+    const submit = event.currentTarget.querySelector('[type="submit"]');
+    submit.disabled = true;
+    submit.textContent = "Updating password…";
+    let result;
+    try {
+      result = await supabase.auth.updateUser({ password });
+    } catch (error) {
+      result = { error };
+    }
+    if (result.error) {
+      submit.disabled = false;
+      submit.textContent = "Update password";
+      setNotice(notice, authErrorMessage(result.error));
+      return;
+    }
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      console.error("Password updated, but sign-out failed:", error);
+      setNotice(notice, "Your password was updated, but sign-out did not complete. Sign out before sharing this device.", "error");
+      return;
+    }
+    window.history.replaceState({}, "", `${window.location.pathname}#sign-in`);
+    isSignUp = false;
+    renderAuth();
+    setNotice(document.querySelector("#auth-notice"), "Password updated. Sign in with your new password.", "success");
+  });
 }
 
 function renderOnboarding() {
@@ -315,6 +425,13 @@ async function saveProfile(event) {
   if (authReturnPage) {
     sessionStorage.removeItem("gamehub-auth-return");
     activePage = authReturnPage;
+    renderPublicRoute();
+    return;
+  }
+  const sharedReturn = sessionStorage.getItem("gamehub-share-return");
+  if (sharedReturn) {
+    sessionStorage.removeItem("gamehub-share-return");
+    window.history.replaceState({}, "", sharedReturn);
     renderPublicRoute();
     return;
   }
@@ -583,14 +700,43 @@ function renderPublicRoute() {
 }
 
 function setPublicMetadata(title, description) {
-  document.title = `${title} · GameHub Africa`;
+  const safeTitle = String(title || "DrivenWave").replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "").trim();
+  const safeDescription = String(description || "Find players and games on DrivenWave.")
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "").replace(/\s+/g, " ").trim();
+  document.title = `${safeTitle || "Gaming community"} · DrivenWave`;
   let metaDescription = document.querySelector('meta[name="description"]');
   if (!metaDescription) {
     metaDescription = document.createElement("meta");
     metaDescription.name = "description";
     document.head.append(metaDescription);
   }
-  metaDescription.content = description;
+  metaDescription.content = safeDescription || "Find players and games on DrivenWave.";
+  const canonical = new URL(window.location.pathname, getPublicSiteUrl(configuredPublicSiteUrl)).href;
+  let canonicalLink = document.querySelector('link[rel="canonical"]');
+  if (!canonicalLink) {
+    canonicalLink = document.createElement("link");
+    canonicalLink.rel = "canonical";
+    document.head.append(canonicalLink);
+  }
+  canonicalLink.href = canonical;
+  for (const [property, value] of [
+    ["og:title", document.title],
+    ["og:description", metaDescription.content],
+    ["og:url", canonical],
+    ["og:image", `${getPublicSiteUrl(configuredPublicSiteUrl)}/drivenwave-social.png`],
+    ["twitter:title", document.title],
+    ["twitter:description", metaDescription.content],
+    ["twitter:image", `${getPublicSiteUrl(configuredPublicSiteUrl)}/drivenwave-social.png`],
+  ]) {
+    let meta = document.querySelector(`meta[property="${property}"], meta[name="${property}"]`);
+    if (!meta) {
+      meta = document.createElement("meta");
+      if (property.startsWith("og:")) meta.setAttribute("property", property);
+      else meta.name = property;
+      document.head.append(meta);
+    }
+    meta.content = value;
+  }
 }
 
 async function renderSharedPublicPage(route) {
@@ -605,7 +751,7 @@ async function renderSharedPublicPage(route) {
     if (!data) return renderSharedNotFound(container);
     const avatarUrl = data.avatar_path ? supabase.storage.from("gamehub-avatars").getPublicUrl(data.avatar_path).data.publicUrl : "";
     const title = `${data.display_name} (@${data.username})`;
-    setPublicMetadata(title, data.bio || `${data.display_name}'s public gaming profile on GameHub Africa.`);
+    setPublicMetadata(title, `${data.display_name}’s public gaming profile on DrivenWave.`);
     const url = publicShareUrl(`/@${encodeURIComponent(data.username)}`);
     container.innerHTML = `<article class="share-profile-card"><span class="avatar profile-avatar ${profileCosmeticClass(data.profile_cosmetic_key)}">${avatarUrl ? `<img src="${escapeHtml(avatarUrl)}" alt="" />` : escapeHtml(initials(data.display_name))}</span><p class="eyebrow">PUBLIC GAMER PROFILE</p><h1>${escapeHtml(data.display_name)}</h1><p class="player-handle">@${escapeHtml(data.username)}</p><p class="muted">${escapeHtml(data.bio || "Ready to meet fellow gamers.")}</p><small>${escapeHtml(countryName(data.country_code))}</small><div class="card-actions"><a class="button primary compact" href="${currentUser ? "#discover" : "#register"}">${currentUser ? "Find players" : "Join GameHub"}</a></div>${shareActions(url, title, "Check out this gaming profile on GameHub Africa.")}</article>`;
     return bindShareActions(container);
@@ -1409,6 +1555,7 @@ const navigation = [
   ["home", "Home"], ["discover", "Players"], ["games", "Games"], ["live", "Live"], ["calls", "Calls"], ["communities", "Communities"],
   ["teams", "Teams"], ["tournaments", "Tournaments"], ["marketplace", "Marketplace"],
   ["messages", "Messages"], ["notifications", "Notifications"], ["profile", "My profile"], ["settings", "Settings"],
+  ["flyers", "Flyer studio"],
 ];
 
 function navigateToAppPage(page) {
@@ -1456,6 +1603,7 @@ function renderPage() {
   else if (activePage === "notifications") renderNotifications(content);
   else if (activePage === "settings") renderSettings(content);
   else if (activePage === "marketplace") renderMarketplace(content);
+  else if (activePage === "flyers") void renderFlyers(content);
   else if (activePage === "admin") renderAdmin(content);
 }
 
@@ -1502,6 +1650,217 @@ async function renderProfileStyleSettings(container) {
     await loadProfile();
     renderPage();
     announce("Profile style updated");
+  });
+}
+
+async function renderFlyers(content) {
+  const prefill = (() => {
+    try {
+      const value = JSON.parse(sessionStorage.getItem("drivenwave-flyer-prefill") || "null");
+      sessionStorage.removeItem("drivenwave-flyer-prefill");
+      return value;
+    } catch {
+      sessionStorage.removeItem("drivenwave-flyer-prefill");
+      return null;
+    }
+  })();
+  const profileUrl = publicShareUrl(`/@${encodeURIComponent(currentProfile.username)}`);
+  const avatarUrl = currentProfile.avatar_path
+    ? supabase.storage.from("gamehub-avatars").getPublicUrl(currentProfile.avatar_path).data.publicUrl
+    : "";
+  content.innerHTML = `${pageHeader("DRIVENWAVE CREATOR STUDIO", "Make a gaming flyer.", "Design and download a share-ready PNG. Share it to WhatsApp yourself; images are never attached automatically.")}<section class="flyer-studio"><form id="flyer-form" class="edit-card flyer-editor"><div id="flyer-error" class="notice" role="alert" hidden></div><label for="flyer-source">Start from your public content</label><select id="flyer-source"><option value="custom">Custom event, challenge or achievement</option><option value="profile">My public profile</option><option value="loading" disabled>Loading your content…</option></select><label for="flyer-type">Flyer type</label><select id="flyer-type">${Object.entries(FLYER_TYPES).map(([key, label]) => `<option value="${key}">${escapeHtml(label)}</option>`).join("")}</select><label for="flyer-title">Main title</label><input id="flyer-title" maxlength="90" required /><label for="flyer-game">Game or focus (optional)</label><input id="flyer-game" maxlength="80" /><label for="flyer-description">Description</label><textarea id="flyer-description" maxlength="220" rows="3" required></textarea><label for="flyer-date">Date (optional)</label><input id="flyer-date" maxlength="60" placeholder="Use the date shown on your event" /><label for="flyer-prize">Verified prize (optional)</label><input id="flyer-prize" maxlength="80" placeholder="Only add prizes confirmed by the organizer" /><label for="flyer-cta">Call to action</label><input id="flyer-cta" maxlength="54" required /><label for="flyer-format">Image format</label><select id="flyer-format">${Object.entries(FLYER_FORMATS).map(([key, value]) => `<option value="${key}">${escapeHtml(value.label)} · ${value.width} × ${value.height}</option>`).join("")}</select><label for="flyer-theme">Theme</label><select id="flyer-theme"><option value="neon">Neon circuit</option><option value="violet">Violet arena</option><option value="ember">Ember league</option></select><fieldset class="flyer-options"><legend>Flyer details</legend><label class="check-label"><input id="flyer-username" type="checkbox" checked /><span>Show my username</span></label><label class="check-label"><input id="flyer-avatar" type="checkbox" ${avatarUrl ? "checked" : ""} /><span>Show my avatar${avatarUrl ? "" : " (no avatar uploaded)"}</span></label><label class="check-label"><input id="flyer-link" type="checkbox" checked /><span>Show public link</span></label></fieldset><p class="muted-small">Flyer copy is editable. Add only accurate dates, prizes and achievement details. Private-profile links may not be viewable by the public.</p><div class="card-actions"><button class="button primary" type="submit">Generate preview</button><button class="button secondary" type="button" id="flyer-download">Download PNG</button></div><div id="flyer-download-status" class="notice" role="status" hidden></div><div class="flyer-share-actions" id="flyer-share-actions" hidden><button class="button secondary compact" type="button" id="flyer-whatsapp">Share link on WhatsApp</button><button class="button secondary compact" type="button" id="flyer-native-share">Share link</button><p class="muted-small">Download the PNG, then attach it manually in WhatsApp. Sharing opens WhatsApp with the page link and message only.</p></div></form><section class="flyer-preview-panel"><div class="section-heading"><div><p class="eyebrow">YOUR PREVIEW</p><h2 id="flyer-preview-heading">Generate a preview to begin</h2></div><span id="flyer-dimensions" class="status-tag">1080 × 1920 PNG</span></div><div class="flyer-preview-frame"><canvas id="flyer-canvas" aria-label="Preview of your promotional flyer" hidden></canvas><div id="flyer-placeholder" class="empty-state"><p>Your artwork will appear here at the selected format.</p></div></div></section></section>`;
+  content.querySelector("#flyer-game").insertAdjacentHTML("afterend", '<label for="flyer-branding">Team or community branding (optional)</label><input id="flyer-branding" maxlength="80" />');
+  content.querySelector(".flyer-options").insertAdjacentHTML("beforeend", '<label class="check-label"><input id="flyer-branding-enabled" type="checkbox" checked /><span>Show team/community branding</span></label>');
+  const form = content.querySelector("#flyer-form");
+  const sourceSelect = content.querySelector("#flyer-source");
+  let activePrefill = prefill;
+  const sourceData = new Map();
+  const profileItem = {
+    type: "profile",
+    title: currentProfile.display_name,
+    branding: "",
+    game: "",
+    description: currentProfile.bio || "Connect with me on DrivenWave.",
+    shareUrl: currentProfile.profile_visibility === "public" ? profileUrl : "",
+    avatarUrl,
+  };
+  sourceData.set("profile", profileItem);
+  sourceSelect.querySelector('[value="profile"]').textContent = `${currentProfile.display_name} — profile`;
+  const queries = await Promise.all([
+    supabase.from("communities").select("name, description, game, share_code").eq("owner_id", currentUser.id).eq("visibility", "public").eq("status", "active").limit(30),
+    supabase.from("teams").select("name, description, game, share_code").eq("captain_id", currentUser.id).eq("visibility", "public").limit(30),
+    supabase.from("tournaments").select("name, game, rules, status, starts_at, prize_description, prize_verified_at, share_code").eq("organizer_id", currentUser.id).neq("status", "draft").limit(30),
+  ]);
+  const queryError = queries.find((result) => result.error)?.error;
+  if (queryError) {
+    showErrorNotice(content.querySelector("#flyer-error"), queryError, "Could not load your public content.");
+    sourceSelect.querySelector('[value="loading"]')?.remove();
+  } else {
+    const [communities, teams, tournaments] = queries.map(({ data }) => data || []);
+    const items = [
+      ...communities.map((item) => ({ kind: "community", item })),
+      ...teams.map((item) => ({ kind: "team", item })),
+      ...tournaments.map((item) => ({ kind: "tournament", item })),
+    ];
+    items.forEach(({ kind, item }, index) => {
+      const key = `${kind}:${index}`;
+      const isTournament = kind === "tournament";
+      const title = item.name;
+      const date = isTournament && item.starts_at
+        ? datePart(item.starts_at, { dateStyle: "medium", timeStyle: "short" })
+        : "";
+      const prize = isTournament && item.prize_verified_at ? item.prize_description || "" : "";
+      sourceData.set(key, {
+        type: kind,
+        title,
+        branding: ["community", "team"].includes(kind) ? title : "",
+        game: item.game || "",
+        description: item.description || (isTournament ? item.rules || "" : ""),
+        date,
+        prize,
+        shareUrl: publicShareUrl(`/${kind === "community" ? "communities" : `${kind}s`}/${slugify(title)}-${item.share_code}`),
+        avatarUrl,
+      });
+      const option = document.createElement("option");
+      option.value = key;
+      option.textContent = `${kind[0].toUpperCase()}${kind.slice(1)} — ${title}`;
+      sourceSelect.append(option);
+    });
+    sourceSelect.querySelector('[value="loading"]')?.remove();
+  }
+  const populate = (item) => {
+    content.querySelector("#flyer-type").value = item.type in FLYER_TYPES ? item.type : "event";
+    content.querySelector("#flyer-title").value = prefill?.title || item.title || "";
+    content.querySelector("#flyer-branding").value = item.branding || "";
+    content.querySelector("#flyer-game").value = item.game || "";
+    content.querySelector("#flyer-description").value = prefill?.description || item.description || "";
+    content.querySelector("#flyer-date").value = item.date || "";
+    content.querySelector("#flyer-prize").value = item.prize || "";
+    content.querySelector("#flyer-cta").value = item.type === "tournament" ? "VIEW TOURNAMENT" : item.type === "team" ? "JOIN THE TEAM" : "JOIN THE COMMUNITY";
+    content.querySelector("#flyer-link").checked = Boolean(prefill?.shareUrl || item.shareUrl);
+    content.querySelector("#flyer-avatar").checked = Boolean(item.avatarUrl);
+    content.querySelector("#flyer-branding-enabled").checked = Boolean(item.branding);
+  };
+  populate(prefill ? { ...profileItem, ...prefill, type: "event" } : profileItem);
+  sourceSelect.addEventListener("change", () => {
+    const item = sourceData.get(sourceSelect.value);
+    if (item) {
+      activePrefill = null;
+      populate(item);
+    }
+  });
+  const canvas = content.querySelector("#flyer-canvas");
+  const drawPreview = async () => {
+    const notice = content.querySelector("#flyer-error");
+    setNotice(notice, "");
+    canvas.width = 0;
+    canvas.height = 0;
+    canvas.hidden = true;
+    content.querySelector("#flyer-placeholder").hidden = false;
+    const format = content.querySelector("#flyer-format").value;
+    const selected = sourceData.get(sourceSelect.value) || profileItem;
+    try {
+      await document.fonts?.ready;
+      const selectedAvatar = content.querySelector("#flyer-avatar").checked
+        ? await loadFlyerAvatar(selected.avatarUrl || avatarUrl)
+        : null;
+      drawFlyer(canvas, {
+        type: content.querySelector("#flyer-type").value,
+        format,
+        theme: content.querySelector("#flyer-theme").value,
+        title: content.querySelector("#flyer-title").value.trim(),
+        game: content.querySelector("#flyer-game").value.trim(),
+        branding: content.querySelector("#flyer-branding").value.trim(),
+        showBranding: content.querySelector("#flyer-branding-enabled").checked,
+        description: content.querySelector("#flyer-description").value.trim(),
+        date: content.querySelector("#flyer-date").value.trim(),
+        prize: content.querySelector("#flyer-prize").value.trim(),
+        cta: content.querySelector("#flyer-cta").value.trim(),
+        username: currentProfile.username,
+        showUsername: content.querySelector("#flyer-username").checked,
+        showAvatar: content.querySelector("#flyer-avatar").checked,
+        showLink: content.querySelector("#flyer-link").checked,
+        shareUrl: activePrefill?.shareUrl || selected.shareUrl || profileUrl,
+        accent: "#77f3d0",
+      }, selectedAvatar);
+      content.querySelector("#flyer-placeholder").hidden = true;
+      canvas.hidden = false;
+      content.querySelector("#flyer-preview-heading").textContent = `${content.querySelector("#flyer-type").selectedOptions[0].textContent} · preview`;
+      const dimensions = FLYER_FORMATS[format];
+      content.querySelector("#flyer-dimensions").textContent = `${dimensions.width} × ${dimensions.height} PNG`;
+      content.querySelector("#flyer-share-actions").hidden = !(activePrefill?.shareUrl || selected.shareUrl);
+    } catch (error) {
+      showErrorNotice(notice, error, "Could not generate the flyer preview.");
+    }
+  };
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await drawPreview();
+  });
+  content.querySelector("#flyer-format").addEventListener("change", async () => {
+    if (canvas.width) await drawPreview();
+    else {
+      const format = FLYER_FORMATS[content.querySelector("#flyer-format").value];
+      content.querySelector("#flyer-dimensions").textContent = `${format.width} × ${format.height} PNG`;
+    }
+  });
+  for (const selector of ["#flyer-type", "#flyer-theme", "#flyer-username", "#flyer-avatar", "#flyer-link"]) {
+    content.querySelector(selector).addEventListener("change", async () => {
+      if (canvas.width) await drawPreview();
+    });
+  }
+  content.querySelector("#flyer-download").addEventListener("click", async () => {
+    const status = content.querySelector("#flyer-download-status");
+    try {
+      if (!form.reportValidity()) return;
+      await drawPreview();
+      if (!canvas.width) throw new Error("Generate a valid preview before downloading.");
+      const blob = await canvasToPng(canvas);
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const type = content.querySelector("#flyer-type").value;
+      const format = content.querySelector("#flyer-format").value;
+      link.href = downloadUrl;
+      link.download = `drivenwave-${type}-${format}.png`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+      setNotice(status, "PNG flyer downloaded. Attach the image to WhatsApp yourself.", "success");
+    } catch (error) {
+      showErrorNotice(status, error, "The flyer could not be downloaded.");
+    }
+  });
+  content.querySelector("#flyer-whatsapp").addEventListener("click", () => {
+    const selected = sourceData.get(sourceSelect.value) || profileItem;
+    const shareUrl = activePrefill?.shareUrl || selected.shareUrl || profileUrl;
+    const message = `Check out ${content.querySelector("#flyer-title").value.trim()} on DrivenWave!`;
+    const mobile = /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+    const opened = window.open(whatsappShareUrl(message, shareUrl, mobile), "_blank");
+    if (opened) opened.opener = null;
+    setNotice(
+      content.querySelector("#flyer-download-status"),
+      opened
+        ? "WhatsApp opened with the public link. Download the PNG and attach it manually."
+        : "Your browser blocked WhatsApp. Download the PNG and share it from WhatsApp manually.",
+      opened ? "success" : "error",
+    );
+  });
+  content.querySelector("#flyer-native-share").addEventListener("click", async (event) => {
+    const selected = sourceData.get(sourceSelect.value) || profileItem;
+    const shareUrl = activePrefill?.shareUrl || selected.shareUrl || profileUrl;
+    if (!navigator.share) {
+      content.querySelector("#flyer-whatsapp").click();
+      return;
+    }
+    try {
+      await navigator.share({
+        title: content.querySelector("#flyer-title").value,
+        text: "Check out this gaming page on DrivenWave.",
+        url: shareUrl,
+      });
+      setNotice(content.querySelector("#flyer-download-status"), "Link shared. Download and attach the PNG separately if needed.", "success");
+    } catch (error) {
+      if (error.name !== "AbortError") showErrorNotice(content.querySelector("#flyer-download-status"), error, "Sharing did not complete.");
+    }
   });
 }
 
@@ -3033,7 +3392,19 @@ async function loadProfile() {
 async function showAuthenticatedApp() {
   renderLoading("Loading your profile");
   try {
-    await loadProfile();
+    try {
+      await loadProfile();
+    } catch (error) {
+      if (error.code !== "PGRST116") throw error;
+      const { error: repairError } = await supabase.rpc("ensure_my_profile");
+      if (repairError) throw repairError;
+      await loadProfile();
+    }
+    const authSuccess = sessionStorage.getItem("drivenwave-auth-success");
+    if (authSuccess) {
+      sessionStorage.removeItem("drivenwave-auth-success");
+      showGlobalStatus(authSuccess, "success");
+    }
     if (!currentProfile.onboarding_completed_at || !currentProfile.username) {
       renderOnboarding();
       return;
@@ -3150,17 +3521,63 @@ window.addEventListener("unhandledrejection", (event) => {
 if (!isSupabaseConfigured) {
   renderPublicRoute();
 } else {
+  const initialAuthCallback = authCallbackDetails();
   renderLoading();
-  supabase.auth.getSession().then(({ data: { session }, error }) => {
-    if (error) {
-      const presentation = describeError(error);
-      app.innerHTML = `<main class="loading-screen"><div class="notice error"><span class="error-category">${escapeHtml(presentation.category)}</span><p>${escapeHtml(presentation.message)}</p></div><button class="button secondary" data-action="reload">Retry</button></main>`;
-      app.querySelector('[data-action="reload"]').addEventListener("click", () => window.location.reload());
+  supabase.auth.getSession().then(async ({ data: { session }, error }) => {
+    clearAuthCallbackUrl();
+    const callbackError = initialAuthCallback.error;
+    if (callbackError && session) {
+      currentUser = session.user;
+      currentProfile = null;
+      await showAuthenticatedApp();
+      showGlobalStatus(authCallbackErrorMessage(callbackError), "error");
+      return;
+    }
+    if (initialAuthCallback.flow === "recovery" && session && !error) {
+      currentUser = session.user;
+      clearAuthCallbackUrl();
+      renderPasswordRecovery();
+      return;
+    }
+    if (callbackError || error || (initialAuthCallback.flow === "recovery" && !session)) {
+      currentUser = null;
+      currentProfile = null;
+      isSignUp = false;
+      renderAuth();
+      const message = authCallbackErrorMessage(callbackError)
+        || (initialAuthCallback.flow === "recovery"
+          ? "This password recovery link is invalid, expired or already used. Request a new recovery email and open its latest link."
+          : authErrorMessage(error));
+      setNotice(document.querySelector("#auth-notice"), message);
+      return;
+    }
+    if (initialAuthCallback.flow === "oauth" && session) {
+      sessionStorage.setItem("drivenwave-auth-success", "Google sign-in complete.");
+    } else if (initialAuthCallback.flow === "verify" && session) {
+      sessionStorage.setItem("drivenwave-auth-success", "Email verified. Your account is ready.");
+    }
+    if (initialAuthCallback.flow === "verify" && !session && !callbackError) {
+      renderAuth();
+      setNotice(document.querySelector("#auth-notice"), "If your verification link confirmed the email, sign in now. If verification is still required, request a new email.");
+      return;
+    }
+    if (initialAuthCallback.isCallback && !session && !callbackError) {
+      renderAuth();
+      setNotice(document.querySelector("#auth-notice"), "Sign-in was not completed. You can try again.");
       return;
     }
     currentUser = session?.user || null;
     if (currentUser) showAuthenticatedApp();
     else renderPublicRoute();
+  }).catch((error) => {
+    clearAuthCallbackUrl();
+    console.error("Could not restore Supabase session:", error?.name || "unknown error");
+    renderAuth();
+    const message = authCallbackErrorMessage(initialAuthCallback.error)
+      || (initialAuthCallback.flow === "recovery"
+        ? "This password recovery link is invalid, expired or already used. Request a new recovery email."
+        : "GameHub could not restore your session. Check your connection and try signing in again.");
+    setNotice(document.querySelector("#auth-notice"), message);
   });
   supabase.auth.onAuthStateChange((event, session) => {
     const nextUser = session?.user || null;
@@ -3177,42 +3594,6 @@ if (!isSupabaseConfigured) {
       if (currentUser) showAuthenticatedApp();
       else renderPublicRoute();
     }
-
-    function renderPasswordRecovery() {
-      app.innerHTML = `<main class="onboarding-wrap"><section class="onboarding-card"><p class="eyebrow">ACCOUNT SECURITY</p><h1>Choose a new password.</h1><p class="muted">Use at least 8 characters for your new password.</p><div id="recovery-notice" class="notice" role="alert" hidden></div><form id="recovery-form"><label for="new-password">New password</label><div class="password-control"><input id="new-password" type="password" minlength="8" autocomplete="new-password" required /><button class="text-button" type="button" data-action="toggle-password" aria-controls="new-password" aria-pressed="false">Show</button></div><label for="confirm-password">Confirm new password</label><div class="password-control"><input id="confirm-password" type="password" minlength="8" autocomplete="new-password" required /><button class="text-button" type="button" data-action="toggle-password" aria-controls="confirm-password" aria-pressed="false">Show</button></div><button class="button primary full" type="submit">Update password</button></form></section></main>`;
-      document.querySelector("#recovery-form").addEventListener("submit", async (event) => {
-        event.preventDefault();
-        const password = document.querySelector("#new-password").value;
-        const confirmation = document.querySelector("#confirm-password").value;
-        const notice = document.querySelector("#recovery-notice");
-        if (password !== confirmation) {
-          setNotice(notice, "The passwords don’t match.");
-          return;
-        }
-        const submit = event.currentTarget.querySelector('[type="submit"]');
-        submit.disabled = true;
-        submit.textContent = "Updating password…";
-        let result;
-        try {
-          result = await supabase.auth.updateUser({ password });
-        } catch (error) {
-          result = { error };
-        }
-        if (result.error) {
-          submit.disabled = false;
-          submit.textContent = "Update password";
-          setNotice(notice, authErrorMessage(result.error));
-          return;
-        }
-        const { error } = await supabase.auth.signOut();
-        if (error) {
-          console.error("Password updated, but sign-out failed:", error);
-          setNotice(notice, "Your password was updated, but we couldn't sign you out. Please sign out manually.", "success");
-          return;
-        }
-        announce("Password updated. Sign in with your new password.");
-      });
-    }
   });
   app.addEventListener("click", async (event) => {
     const action = event.target.closest("[data-action]")?.dataset.action;
@@ -3223,7 +3604,7 @@ if (!isSupabaseConfigured) {
       button.textContent = "Connecting to Google…";
       let result;
       try {
-        result = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.href } });
+        result = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: authCallbackUrl("oauth") } });
       } catch (error) {
         result = { error };
       }
@@ -3252,19 +3633,51 @@ if (!isSupabaseConfigured) {
       document.querySelector("#confirm-password").required = isSignUp;
     } else if (action === "reset-password") {
       const email = document.querySelector("#email").value.trim();
-      if (!email) {
-        setNotice(document.querySelector("#auth-notice"), "Enter your email address above, then choose Forgot password.");
+      const emailInput = document.querySelector("#email");
+      if (!email || !emailInput.checkValidity()) {
+        setNotice(document.querySelector("#auth-notice"), "Enter a valid email address, then choose Forgot password.");
         document.querySelector("#email").focus();
         return;
       }
+      const button = event.target.closest("button");
+      button.disabled = true;
+      button.textContent = "Sending recovery link…";
       let result;
       try {
-        result = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.href });
+        result = await supabase.auth.resetPasswordForEmail(email, { redirectTo: authCallbackUrl("recovery") });
       } catch (error) {
         result = { error };
       }
       const { error } = result;
+      button.disabled = false;
+      button.textContent = "Forgot password?";
       setNotice(document.querySelector("#auth-notice"), error ? authErrorMessage(error) : "If an account exists for that email, a password reset link is on its way.", error ? "error" : "success");
+    } else if (action === "resend-verification") {
+      const email = sessionStorage.getItem("drivenwave-verification-email") || document.querySelector("#email")?.value.trim();
+      if (!email) {
+        setNotice(document.querySelector("#auth-notice"), "Enter your email address before requesting another verification link.");
+        return;
+      }
+      const button = event.target.closest("button");
+      button.disabled = true;
+      button.textContent = "Sending verification link…";
+      let result;
+      try {
+        result = await supabase.auth.resend({
+          type: "signup",
+          email,
+          options: { emailRedirectTo: authCallbackUrl("verify") },
+        });
+      } catch (error) {
+        result = { error };
+      }
+      button.disabled = false;
+      button.textContent = "Resend verification email";
+      setNotice(
+        document.querySelector("#auth-notice"),
+        result.error ? authErrorMessage(result.error) : "If verification is still required, Supabase has accepted a new verification email request.",
+        result.error ? "error" : "success",
+      );
     }
   });
 }

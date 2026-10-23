@@ -6,6 +6,7 @@ export const isSupabaseConfigured = Boolean(VITE_SUPABASE_URL && VITE_SUPABASE_A
 export const supabase = isSupabaseConfigured
   ? createClient(VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, {
       auth: {
+        flowType: "pkce",
         autoRefreshToken: true,
         persistSession: true,
         detectSessionInUrl: true,

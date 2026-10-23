@@ -277,6 +277,23 @@ input::placeholder, textarea::placeholder { color: #696c64; }
 .tournament-details dt { color: var(--muted); font-size: 11px; }
 .tournament-details dd { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
 .share-detail-card > .share-actions { padding-top: 12px; border-top: 1px solid var(--border); }
+.resend-verification { margin-top: 14px; }
+.flyer-studio { display: grid; grid-template-columns: minmax(280px, 430px) minmax(0, 1fr); align-items: start; gap: 28px; }
+.flyer-editor { width: 100%; max-width: none; margin: 0; }
+.flyer-editor .card-actions { flex-wrap: wrap; }
+.flyer-options { margin: 18px 0 0; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; }
+.flyer-options legend { padding: 0 6px; color: #dedfd9; font-size: 12px; font-weight: 600; }
+.flyer-options .check-label { margin: 8px 0; }
+.flyer-preview-panel { position: sticky; top: 24px; min-width: 0; }
+.flyer-preview-panel .section-heading { align-items: flex-start; }
+.flyer-preview-panel .section-heading h2 { margin: 0; font-size: 17px; }
+.flyer-preview-frame { display: grid; min-height: 390px; max-height: calc(100dvh - 150px); place-items: center; overflow: auto; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: radial-gradient(ellipse at 50% 0, #22271c, #11120f 75%); }
+.flyer-preview-frame canvas { display: block; width: auto; max-width: 100%; height: auto; max-height: calc(100dvh - 195px); object-fit: contain; border-radius: 7px; box-shadow: 0 18px 55px #000a; }
+.flyer-preview-frame canvas[hidden] { display: none; }
+.flyer-preview-frame .empty-state { width: 100%; }
+.flyer-share-actions { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+.flyer-share-actions .muted-small { line-height: 1.6; }
+.flyer-share-actions[hidden] { display: none; }
 .public-article .back-link { display: inline-block; margin-bottom: 45px; }
 .public-article h1 { margin: 0 0 16px; font-size: clamp(36px, 6vw, 58px); letter-spacing: -.065em; }
 .public-article > p:not(.eyebrow):not(.draft-label) { color: #c1c4ba; font-size: 14px; line-height: 1.85; }
@@ -357,6 +374,7 @@ button.ticket-row { cursor: pointer; }
   .public-header { flex-wrap: wrap; }
   .public-nav { order: 3; width: 100%; overflow-x: auto; padding: 4px 0 2px; }
   .public-feature-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .flyer-studio { grid-template-columns: minmax(0, 1fr) minmax(260px, .85fr); gap: 16px; }
 }
 @media (max-width: 720px) {
   .auth-layout { display: block; }
@@ -423,6 +441,10 @@ button.ticket-row { cursor: pointer; }
   .public-footer-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px 16px; }
   .help-card-grid { grid-template-columns: 1fr; }
   .public-article { padding-top: 32px; }
+  .flyer-studio { grid-template-columns: 1fr; }
+  .flyer-preview-panel { position: static; }
+  .flyer-preview-frame { min-height: 280px; max-height: none; padding: 12px; }
+  .flyer-preview-frame canvas { max-height: 65vh; }
   .public-article .back-link { margin-bottom: 30px; }
   .public-directory { min-height: calc(100vh - 260px); }
   .page-heading { margin-bottom: 22px; }
