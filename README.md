@@ -21,13 +21,13 @@ GameHub Africa is a mobile-first gaming community application built with vanilla
 
 Supabase PostgreSQL SQL migrations are the schema and migration source of truth. The schema uses Supabase Auth identities, RLS, Storage policies, Realtime publication and PostgreSQL security-definer functions/triggers; introducing Prisma migrations would create a second writer for that schema and risk desynchronizing those Supabase-specific features. The Cloudflare Pages Functions also use the Supabase REST/Auth APIs and do not maintain a long-lived PostgreSQL connection, so a Prisma client/adapter would add complexity without improving this runtime.
 
-Apply `supabase/migrations/202610220001_initial_schema.sql`, then `202610220002_workflows.sql`, `202610220003_public_discovery.sql`, `202610220004_voice_calls.sql`, `202610220005_support_center.sql` and `202610220006_profile_cosmetics.sql` to a development database in that order. Review each migration before applying it to production. The SQL files are the version-controlled migration history; there are no Prisma migrations and no automatic production schema changes.
+Apply `supabase/migrations/202610220001_initial_schema.sql`, then `202610220002_workflows.sql`, `202610220003_public_discovery.sql`, `202610220004_voice_calls.sql`, `202610220005_support_center.sql`, `202610220006_profile_cosmetics.sql` and `202610220007_public_sharing.sql` to a development database in that order. Review each migration before applying it to production. The SQL files are the version-controlled migration history; there are no Prisma migrations and no automatic production schema changes.
 
 ## Local development
 
 Requirements: Node.js 20.19+ or 22.12+. `npm install` installs Vite, Cloudflare Wrangler and the process runner.
 
-1. Use a dedicated Supabase **development** project. In the Supabase SQL Editor, apply all five migrations above in order. Do not run development tests or resets against production.
+1. Use a dedicated Supabase **development** project. In the Supabase SQL Editor, apply all seven migrations above in order. Migration 007 adds opaque share codes and public/private team visibility for public detail links. Do not run development tests or resets against production.
 2. Configure a LiveKit project (Cloud or a maintained self-hosted deployment), then copy `.env.example` to `.env.local` and set `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` and `VITE_LIVEKIT_URL`. The Supabase values and LiveKit WebSocket URL are public browser values. Do not put service-role, LiveKit API secrets or payment secrets here.
 3. Copy `.dev.vars.example` to `.dev.vars` and set the server-side values below. Keep the real file private; it is git-ignored.
 4. Run `npm install`, then `npm run dev:full`. This builds the frontend, starts Vite with hot reload on `http://localhost:5173`, starts local Cloudflare Pages Functions on port 8788, and proxies `/api` calls to the functions server. Stop both with Ctrl+C. Run `npm test` and `npm run build` for validation.
@@ -95,7 +95,7 @@ The simplest supported workflow is the dedicated remote development Supabase pro
 - Set `VITE_LIVEKIT_URL` as a Pages build variable to the matching LiveKit secure WebSocket URL. Keep the API key/secret out of `VITE_*` variables.
 - Set the Cloudflare Pages server-side variable `MARKETPLACE_PURCHASES_ENABLED` to `false` (or leave it unset). This disables only new marketplace checkout; it does not turn off unrelated services or existing payment verification/webhooks. The marketplace UI remains available and reports checkout status on an attempted purchase.
 - Configure Paystack's webhook URL as `https://<your-domain>/api/payments/webhook`.
-- Configure Supabase Auth redirect origins and apply all five reviewed migrations before publishing the frontend.
+- Configure Supabase Auth redirect origins and apply all seven reviewed migrations before publishing the frontend.
 
 Never expose `SUPABASE_SERVICE_ROLE_KEY`, `PAYSTACK_SECRET_KEY`, or `LIVEKIT_API_SECRET` to browser code or commit them. Marketplace checkout is disabled unless the server-side `MARKETPLACE_PURCHASES_ENABLED` value is exactly `true`. Keep it unset or `false` until marketplace terms/refunds and production payment configuration are ready. Payment verification and webhook handling remain active for previously initialized transactions; this gate only blocks creation of new marketplace checkout sessions.
 

@@ -1,5 +1,6 @@
 import { isSupabaseConfigured, supabase } from "./lib/supabase.js";
 import { normalizeUsername, safeExternalUrl, streamDetails, validateUsername } from "./lib/validation.js";
+import { describeError } from "./lib/errors.js";
 
 const app = document.querySelector("#app");
 const announcer = document.querySelector("#announcer");
@@ -66,6 +67,90 @@ function setNotice(element, message, type = "error") {
   element.textContent = message;
   element.className = `notice ${type}`;
   element.hidden = !message;
+}
+
+function showErrorNotice(element, error, prefix = "") {
+  console.error("GameHub request failed:", error);
+  const presentation = describeError(error);
+  const detail = `${presentation.category}: ${prefix ? `${prefix} ` : ""}${presentation.message}`;
+  setNotice(element, detail);
+}
+
+function slugify(value) {
+  return String(value || "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "gamehub";
+}
+
+function publicShareUrl(path) {
+  return new URL(path, window.location.origin).href;
+}
+
+function shareActions(url, title, message) {
+  return `<div class="share-actions" data-share-url="${escapeHtml(url)}" data-share-title="${escapeHtml(title)}" data-share-message="${escapeHtml(message)}"><button class="button secondary compact" type="button" data-share-native>Share</button><button class="button secondary compact" type="button" data-share-whatsapp>WhatsApp</button><button class="text-button" type="button" data-share-copy>Copy link</button><p class="share-feedback" role="status" aria-live="polite" hidden></p></div>`;
+}
+
+function bindShareActions(container) {
+  container.querySelectorAll("[data-share-copy]").forEach((button) => button.addEventListener("click", async () => {
+    const actions = button.closest(".share-actions");
+    const feedback = actions.querySelector(".share-feedback");
+    const url = actions.dataset.shareUrl;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard API is unavailable.");
+      await navigator.clipboard.writeText(url);
+      feedback.textContent = "Link copied.";
+      feedback.hidden = false;
+    } catch {
+      const input = document.createElement("input");
+      input.className = "share-link-fallback";
+      input.readOnly = true;
+      input.value = url;
+      input.setAttribute("aria-label", "Public share link");
+      actions.append(input);
+      input.focus();
+      input.select();
+      feedback.textContent = "Copy the selected public link.";
+      feedback.hidden = false;
+    }
+  }));
+  container.querySelectorAll("[data-share-whatsapp]").forEach((button) => button.addEventListener("click", () => {
+    const actions = button.closest(".share-actions");
+    const url = actions.dataset.shareUrl;
+    const text = `${actions.dataset.shareMessage}\n${url}`;
+    const opened = window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener,noreferrer");
+    const feedback = actions.querySelector(".share-feedback");
+    feedback.textContent = opened
+      ? "WhatsApp opened. Review the message and press Send there."
+      : "Your browser blocked WhatsApp. Copy the link and share it from WhatsApp.";
+    feedback.hidden = false;
+  }));
+  container.querySelectorAll("[data-share-native]").forEach((button) => button.addEventListener("click", async () => {
+    const actions = button.closest(".share-actions");
+    const feedback = actions.querySelector(".share-feedback");
+    const payload = {
+      title: actions.dataset.shareTitle,
+      text: actions.dataset.shareMessage,
+      url: actions.dataset.shareUrl,
+    };
+    if (!navigator.share) {
+      actions.querySelector("[data-share-copy]").click();
+      return;
+    }
+    try {
+      await navigator.share(payload);
+      feedback.textContent = "Share sheet closed.";
+      feedback.hidden = false;
+    } catch (error) {
+      if (error.name !== "AbortError") showErrorNotice(feedback, error, "Sharing did not complete.");
+    }
+  }));
+}
+
+function sharedPathRoute(pathname = window.location.pathname) {
+  const profileMatch = pathname.match(/^\/@([a-z0-9_]{3,24})\/?$/i);
+  if (profileMatch) return { kind: "profile", username: normalizeUsername(profileMatch[1]) };
+  const entityMatch = pathname.match(/^\/(communities|teams|tournaments)\/[a-z0-9-]+-([a-f0-9]{12})\/?$/i);
+  if (entityMatch) return { kind: entityMatch[1].slice(0, -1), code: entityMatch[2].toLowerCase() };
+  return null;
 }
 
 function button(label, action, kind = "primary") {
@@ -152,11 +237,13 @@ function bindAuthForm() {
 }
 
 function authErrorMessage(error) {
+  const presentation = describeError(error);
+  if (presentation.category !== "INPUT") return `${presentation.category}: ${presentation.message}`;
   if (/invalid login credentials/i.test(error.message)) return "That email and password combination was not recognized. Check them and try again.";
   if (/email not confirmed/i.test(error.message)) return "Please verify your email using the link we sent before signing in.";
   if (/already registered/i.test(error.message)) return "An account already exists for this email. Try signing in instead.";
   if (/rate limit|too many requests/i.test(error.message)) return "Too many attempts. Please wait a little and try again.";
-  return error.message || "We couldn't complete that request. Please try again.";
+  return presentation.message;
 }
 
 function renderOnboarding() {
@@ -213,7 +300,7 @@ async function saveProfile(event) {
     if (error.code === "23505") {
       setNotice(notice, "That username is already taken. Try another one.");
     } else {
-      setNotice(notice, `We couldn't save your profile: ${error.message}`);
+      showErrorNotice(notice, error, "We couldn't save your profile.");
     }
     return;
   }
@@ -429,6 +516,10 @@ const longPublicPages = {
 
 function renderPublicRoute() {
   const page = pageFromLocation();
+  const sharedRoute = sharedPathRoute();
+  if (["sign-in", "register"].includes(page) && sharedRoute) {
+    sessionStorage.setItem("gamehub-share-return", window.location.pathname);
+  }
   if (["privacy-center", "admin-support"].includes(page) && !currentUser) {
     if (!isSupabaseConfigured) return renderSetupScreen();
     isSignUp = false;
@@ -476,6 +567,10 @@ function renderPublicRoute() {
     if (!currentUser) return renderAuth();
     return renderSupportPage(page === "support-payments" ? "payments" : "account");
   }
+  if (sharedRoute && !["sign-in", "register"].includes(page)) {
+    renderSharedPublicPage(sharedRoute);
+    return;
+  }
   if (page === "home") {
     renderPublicHome();
     return;
@@ -487,6 +582,117 @@ function renderPublicRoute() {
   renderPublicNotFound();
 }
 
+function setPublicMetadata(title, description) {
+  document.title = `${title} · GameHub Africa`;
+  let metaDescription = document.querySelector('meta[name="description"]');
+  if (!metaDescription) {
+    metaDescription = document.createElement("meta");
+    metaDescription.name = "description";
+    document.head.append(metaDescription);
+  }
+  metaDescription.content = description;
+}
+
+async function renderSharedPublicPage(route) {
+  if (!isSupabaseConfigured) return renderSetupScreen();
+  renderPublicShell(`<main class="public-main public-article"><div id="shared-public-content"><div class="skeleton-card"></div></div></main>`);
+  const container = app.querySelector("#shared-public-content");
+  if (route.kind === "profile") {
+    const { data, error } = await supabase.from("profiles")
+      .select("username, display_name, bio, country_code, avatar_path, profile_cosmetic_key")
+      .eq("username", route.username).maybeSingle();
+    if (error) return renderDataError(container, error, () => renderSharedPublicPage(route));
+    if (!data) return renderSharedNotFound(container);
+    const avatarUrl = data.avatar_path ? supabase.storage.from("gamehub-avatars").getPublicUrl(data.avatar_path).data.publicUrl : "";
+    const title = `${data.display_name} (@${data.username})`;
+    setPublicMetadata(title, data.bio || `${data.display_name}'s public gaming profile on GameHub Africa.`);
+    const url = publicShareUrl(`/@${encodeURIComponent(data.username)}`);
+    container.innerHTML = `<article class="share-profile-card"><span class="avatar profile-avatar ${profileCosmeticClass(data.profile_cosmetic_key)}">${avatarUrl ? `<img src="${escapeHtml(avatarUrl)}" alt="" />` : escapeHtml(initials(data.display_name))}</span><p class="eyebrow">PUBLIC GAMER PROFILE</p><h1>${escapeHtml(data.display_name)}</h1><p class="player-handle">@${escapeHtml(data.username)}</p><p class="muted">${escapeHtml(data.bio || "Ready to meet fellow gamers.")}</p><small>${escapeHtml(countryName(data.country_code))}</small><div class="card-actions"><a class="button primary compact" href="${currentUser ? "#discover" : "#register"}">${currentUser ? "Find players" : "Join GameHub"}</a></div>${shareActions(url, title, "Check out this gaming profile on GameHub Africa.")}</article>`;
+    return bindShareActions(container);
+  }
+
+  if (route.kind === "community") {
+    const { data, error } = await supabase.from("communities")
+      .select("id, name, description, game, rules, share_code")
+      .eq("share_code", route.code).eq("visibility", "public").eq("status", "active").maybeSingle();
+    if (error) return renderDataError(container, error, () => renderSharedPublicPage(route));
+    if (!data) return renderSharedNotFound(container);
+    const url = publicShareUrl(`/communities/${slugify(data.name)}-${data.share_code}`);
+    setPublicMetadata(data.name, data.description || `Join ${data.name} on GameHub Africa.`);
+    let joined = false;
+    if (currentUser) {
+      const membership = await supabase.from("community_members").select("community_id")
+        .eq("community_id", data.id).eq("user_id", currentUser.id).maybeSingle();
+      if (membership.error) return renderDataError(container, membership.error, () => renderSharedPublicPage(route));
+      joined = Boolean(membership.data);
+    }
+    container.innerHTML = `<article class="share-detail-card"><p class="eyebrow">${escapeHtml(data.game || "GAMING COMMUNITY")}</p><h1>${escapeHtml(data.name)}</h1><p class="muted">${escapeHtml(data.description || "A place for players to connect.")}</p><section class="document-section"><h2>Community rules</h2><p>${escapeHtml(data.rules || "Be respectful and follow GameHub community guidelines.")}</p></section><div class="card-actions">${joined ? `<span class="status-tag">You’re a member</span>` : currentUser ? `<button class="button primary compact" type="button" data-join-public-community="${data.id}">Join community</button>` : `<a class="button primary compact" href="#register">Join this community</a>`}</div>${shareActions(url, `${data.name} on GameHub Africa`, "Join our gaming community on GameHub Africa. Find gamers, share updates, and connect with the team.")}</article>`;
+    bindShareActions(container);
+    container.querySelector("[data-join-public-community]")?.addEventListener("click", async (event) => {
+      const control = event.currentTarget;
+      control.disabled = true;
+      const { error: joinError } = await supabase.from("community_members")
+        .insert({ community_id: data.id, user_id: currentUser.id, role: "member" });
+      if (joinError) return showErrorNotice(container.querySelector("#share-error"), joinError, "Could not join this community.");
+      await renderSharedPublicPage(route);
+    });
+    if (container.querySelector("[data-join-public-community]")) {
+      const feedback = document.createElement("div");
+      feedback.id = "share-error";
+      feedback.className = "notice";
+      feedback.hidden = true;
+      container.querySelector(".card-actions").after(feedback);
+    }
+    return;
+  }
+
+  if (route.kind === "team") {
+    const { data, error } = await supabase.from("teams")
+      .select("name, description, game, share_code, captain:profiles!teams_captain_id_fkey(username, display_name)")
+      .eq("share_code", route.code).eq("visibility", "public").maybeSingle();
+    if (error) return renderDataError(container, error, () => renderSharedPublicPage(route));
+    if (!data) return renderSharedNotFound(container);
+    const title = `${data.name} on GameHub Africa`;
+    const url = publicShareUrl(`/teams/${slugify(data.name)}-${data.share_code}`);
+    setPublicMetadata(data.name, data.description || `Meet the ${data.name} team on GameHub Africa.`);
+    container.innerHTML = `<article class="share-detail-card"><p class="eyebrow">${escapeHtml(data.game || "GAMING TEAM")}</p><h1>${escapeHtml(data.name)}</h1><p class="muted">${escapeHtml(data.description || "A team for players.")}</p><section class="document-section"><h2>Team captain</h2><p>${escapeHtml(data.captain?.display_name || data.captain?.username || "GameHub player")}${data.captain?.username ? ` · @${escapeHtml(data.captain.username)}` : ""}</p><p>Team captains invite members. Contact the captain through GameHub to request an invitation.</p></section><div class="card-actions"><a class="button primary compact" href="${currentUser ? "#teams" : "#register"}">${currentUser ? "Open teams" : "Join GameHub"}</a></div>${shareActions(url, title, "Meet this gaming team on GameHub Africa. Connect with the captain to ask about joining.")}</article>`;
+    return bindShareActions(container);
+  }
+
+  if (route.kind === "tournament") {
+    const { data, error } = await supabase.from("tournaments")
+      .select("id, name, game, format, status, rules, starts_at, registration_deadline, participant_limit, prize_description, prize_verified_at, share_code, organizer:profiles!tournaments_organizer_id_fkey(username, display_name)")
+      .eq("share_code", route.code).neq("status", "draft").maybeSingle();
+    if (error) return renderDataError(container, error, () => renderSharedPublicPage(route));
+    if (!data) return renderSharedNotFound(container);
+    const title = `${data.name} on GameHub Africa`;
+    const url = publicShareUrl(`/tournaments/${slugify(data.name)}-${data.share_code}`);
+    setPublicMetadata(data.name, `${data.game} tournament on GameHub Africa. View the rules and registration details.`);
+    const open = data.status === "registration_open"
+      && (!data.registration_deadline || new Date(data.registration_deadline) > new Date());
+    container.innerHTML = `<article class="share-detail-card"><p class="eyebrow">${escapeHtml(data.game)} · ${escapeHtml(data.format)}</p><span class="status-tag">${escapeHtml(data.status.replaceAll("_", " "))}</span><h1>${escapeHtml(data.name)}</h1><dl class="tournament-details"><div><dt>Starts</dt><dd>${escapeHtml(datePart(data.starts_at, { dateStyle: "full", timeStyle: "short" }))}</dd></div><div><dt>Registration deadline</dt><dd>${data.registration_deadline ? escapeHtml(datePart(data.registration_deadline, { dateStyle: "medium", timeStyle: "short" })) : "Set by the organizer"}</dd></div><div><dt>Eligibility</dt><dd>GameHub members; registration availability depends on the status shown above.</dd></div><div><dt>Organizer</dt><dd>${escapeHtml(data.organizer?.display_name || data.organizer?.username || "GameHub organizer")}</dd></div><div><dt>Participant limit</dt><dd>${data.participant_limit ? escapeHtml(String(data.participant_limit)) : "No stated limit"}</dd></div>${data.prize_description && data.prize_verified_at ? `<div><dt>Verified prize</dt><dd>${escapeHtml(data.prize_description)}</dd></div>` : ""}</dl><section class="document-section"><h2>Rules</h2><p>${escapeHtml(data.rules || "Rules to be announced by the organizer.")}</p></section><div class="card-actions">${open ? currentUser ? `<button class="button primary compact" type="button" data-register-shared-tournament="${data.id}">Register individually</button>` : `<a class="button primary compact" href="#register">Join GameHub to register</a>` : `<span class="muted-small">Registration is not currently open.</span>`}</div><div id="share-error" class="notice" role="alert" hidden></div>${shareActions(url, title, "Check out this gaming tournament on GameHub Africa. View the details and register if you're eligible.")}</article>`;
+    bindShareActions(container);
+    container.querySelector("[data-register-shared-tournament]")?.addEventListener("click", async (event) => {
+      const control = event.currentTarget;
+      control.disabled = true;
+      const { error: registrationError } = await supabase.rpc("register_for_tournament", {
+        requested_tournament_id: data.id,
+      });
+      if (registrationError) {
+        control.disabled = false;
+        return showErrorNotice(container.querySelector("#share-error"), registrationError, "Registration did not complete.");
+      }
+      control.textContent = "Registration submitted";
+      setNotice(container.querySelector("#share-error"), "Your tournament registration is confirmed.", "success");
+    });
+    return;
+  }
+}
+
+function renderSharedNotFound(container) {
+  container.innerHTML = `<section class="empty-state"><p class="eyebrow">PUBLIC PAGE</p><h1>This page isn’t available</h1><p>The link may be outdated, the page may have been removed, or the owner may have changed its visibility.</p><a class="button secondary compact" href="/">Explore GameHub</a></section>`;
+}
+
 function pageFromLocation() {
   if (window.location.hash.length > 1) {
     const hash = window.location.hash.slice(1).split("?")[0];
@@ -496,7 +702,7 @@ function pageFromLocation() {
 }
 
 function renderSetupScreen() {
-  app.innerHTML = `<main class="setup-screen public-setup"><a class="brand" href="#home"><span class="brand-mark">G<span>.</span></span><span>GAMEHUB AFRICA</span></a><p class="eyebrow">SUPABASE CONFIGURATION MISSING</p><h1>Connect your Supabase project.</h1><p class="muted">This screen appears when the frontend build does not contain both <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code>. Applying database migrations does not clear this message; they are a separate setup step.</p><section class="setup-instructions"><h2>Running locally</h2><p>In the GameHub project root, create <code>.env.local</code> with those exact variable names and your Supabase project URL and publishable/anon key. Restart Vite after saving the file. If using a production build, build again after setting the variables.</p><h2>Deployed on Cloudflare Pages</h2><p>Add both values as <strong>build environment variables</strong> for the Production environment in your Pages project settings, then trigger a new deployment. Set Preview variables too if you test preview deployments. Cloudflare Functions runtime secrets alone do not configure this browser frontend.</p></section><p class="muted">Only the publishable/anon key belongs in the frontend. Never put a Supabase service-role key here. After configuration, apply the SQL migrations in <code>supabase/migrations</code> in order before enabling account workflows.</p><a class="button secondary" href="#home">Back to GameHub</a></main>`;
+  app.innerHTML = `<main class="setup-screen public-setup"><a class="brand" href="#home"><span class="brand-mark">G<span>.</span></span><span>GAMEHUB AFRICA</span></a><p class="eyebrow">SERVICE CONFIGURATION</p><h1>GameHub is not connected yet.</h1><p class="muted">This is a project/deployment configuration issue, not a mistake by you or a problem with your account or device. The frontend build is missing <code>VITE_SUPABASE_URL</code>, <code>VITE_SUPABASE_ANON_KEY</code>, or both. Applying database migrations does not provide those frontend build values; they are a separate setup step.</p><section class="setup-instructions"><h2>Running locally</h2><p>In the GameHub project root, an operator should create <code>.env.local</code> with those exact variable names and the Supabase project URL and publishable/anon key, then restart Vite. If using a production build, the operator must build again after setting the variables.</p><h2>Deployed on Cloudflare Pages</h2><p>An operator should add both values as <strong>build environment variables</strong> for the Production environment in Pages settings, then trigger a new deployment. Set Preview variables too if preview deployments are used. Cloudflare Functions runtime secrets alone do not configure this browser frontend.</p></section><p class="muted">Only the publishable/anon key belongs in the frontend. Never put a Supabase service-role key here. After configuration, an operator must also apply the SQL migrations in <code>supabase/migrations</code> in order before enabling account workflows.</p><a class="button secondary" href="#home">Back to GameHub</a></main>`;
 }
 
 function renderPublicShell(content, current = "") {
@@ -1024,15 +1230,21 @@ async function loadPublicPlayers(container) {
   if (!data.length) return renderPublicEmpty(container, "No public profiles yet", "As players join and publish their profiles, they will appear here.");
   container.innerHTML = `<div class="player-grid">${data.map((profile) => {
     const avatar = profile.avatar_path ? supabase.storage.from("gamehub-avatars").getPublicUrl(profile.avatar_path).data.publicUrl : "";
-    return `<article class="player-card"><span class="avatar ${profileCosmeticClass(profile.profile_cosmetic_key)}">${avatar ? `<img src="${escapeHtml(avatar)}" alt="" loading="lazy" />` : escapeHtml(initials(profile.display_name))}</span><div class="player-card-copy"><h2>${escapeHtml(profile.display_name)}</h2><p class="player-handle">@${escapeHtml(profile.username)}</p><p class="player-bio">${escapeHtml(profile.bio || "Ready to meet fellow gamers.")}</p><small>${escapeHtml(countryName(profile.country_code))}</small><a class="button secondary compact" href="#register">Connect</a></div></article>`;
+    const link = publicShareUrl(`/@${encodeURIComponent(profile.username)}`);
+    return `<article class="player-card"><span class="avatar ${profileCosmeticClass(profile.profile_cosmetic_key)}">${avatar ? `<img src="${escapeHtml(avatar)}" alt="" loading="lazy" />` : escapeHtml(initials(profile.display_name))}</span><div class="player-card-copy"><h2>${escapeHtml(profile.display_name)}</h2><p class="player-handle">@${escapeHtml(profile.username)}</p><p class="player-bio">${escapeHtml(profile.bio || "Ready to meet fellow gamers.")}</p><small>${escapeHtml(countryName(profile.country_code))}</small><a class="button secondary compact" href="#register">Connect</a>${shareActions(link, `${profile.display_name} on GameHub Africa`, "Check out this gaming profile on GameHub Africa.")}</div></article>`;
   }).join("")}</div>`;
+  bindShareActions(container);
 }
 
 async function loadPublicCommunities(container) {
-  const { data, error } = await supabase.from("communities").select("id, name, description, game, created_at").eq("visibility", "public").eq("status", "active").order("created_at", { ascending: false }).limit(30);
+  const { data, error } = await supabase.from("communities").select("id, name, description, game, share_code, created_at").eq("visibility", "public").eq("status", "active").order("created_at", { ascending: false }).limit(30);
   if (error) return renderDataError(container, error, () => loadPublicCommunities(container));
   if (!data.length) return renderPublicEmpty(container, "No public communities yet", "Public gaming communities will appear here when members create them.");
-  container.innerHTML = `<div class="community-grid">${data.map((community) => `<article class="community-card"><small>${escapeHtml(community.game || "Gaming")}</small><h2>${escapeHtml(community.name)}</h2><p>${escapeHtml(community.description || "A community for players.")}</p><a class="button secondary compact" href="#register">Join community</a></article>`).join("")}</div>`;
+  container.innerHTML = `<div class="community-grid">${data.map((community) => {
+    const url = publicShareUrl(`/communities/${slugify(community.name)}-${community.share_code}`);
+    return `<article class="community-card"><small>${escapeHtml(community.game || "Gaming")}</small><h2>${escapeHtml(community.name)}</h2><p>${escapeHtml(community.description || "A community for players.")}</p><a class="button secondary compact" href="${escapeHtml(url)}">View community</a>${shareActions(url, `${community.name} on GameHub Africa`, "Join our gaming community on GameHub Africa. Find gamers, share updates, and connect with the team.")}</article>`;
+  }).join("")}</div>`;
+  bindShareActions(container);
 }
 
 async function loadPublicStreams(container) {
@@ -1047,10 +1259,14 @@ async function loadPublicStreams(container) {
 }
 
 async function loadPublicTournaments(container) {
-  const { data, error } = await supabase.from("tournaments").select("id, name, game, format, status, starts_at, registration_deadline, participant_limit, prize_description, prize_verified_at, organizer:profiles!tournaments_organizer_id_fkey(username, display_name)").neq("status", "draft").order("starts_at", { ascending: true }).limit(30);
+  const { data, error } = await supabase.from("tournaments").select("id, name, game, format, status, share_code, starts_at, registration_deadline, participant_limit, prize_description, prize_verified_at, organizer:profiles!tournaments_organizer_id_fkey(username, display_name)").neq("status", "draft").order("starts_at", { ascending: true }).limit(30);
   if (error) return renderDataError(container, error, () => loadPublicTournaments(container));
   if (!data.length) return renderPublicEmpty(container, "No tournaments listed yet", "Published tournament details will appear here when organizers are ready.");
-  container.innerHTML = `<div class="tournament-list">${data.map((tournament) => `<article class="tournament-card"><div class="tournament-date"><strong>${datePart(tournament.starts_at, { day: "2-digit" })}</strong><span>${datePart(tournament.starts_at, { month: "short" })}</span></div><div class="tournament-info"><span class="status-tag">${escapeHtml(tournament.status.replaceAll("_", " "))}</span><h2>${escapeHtml(tournament.name)}</h2><p>${escapeHtml(tournament.game)} · ${escapeHtml(tournament.format)} · ${escapeHtml(tournament.organizer?.display_name || "Organizer")}</p><small>${tournament.participant_limit ? `Limit ${tournament.participant_limit} entries` : "Open participant limit"}${tournament.prize_description && tournament.prize_verified_at ? ` · Verified prize: ${escapeHtml(tournament.prize_description)}` : ""}</small><a class="button primary compact" href="#register">Register</a></div></article>`).join("")}</div>`;
+  container.innerHTML = `<div class="tournament-list">${data.map((tournament) => {
+    const url = publicShareUrl(`/tournaments/${slugify(tournament.name)}-${tournament.share_code}`);
+    return `<article class="tournament-card"><div class="tournament-date"><strong>${datePart(tournament.starts_at, { day: "2-digit" })}</strong><span>${datePart(tournament.starts_at, { month: "short" })}</span></div><div class="tournament-info"><span class="status-tag">${escapeHtml(tournament.status.replaceAll("_", " "))}</span><h2>${escapeHtml(tournament.name)}</h2><p>${escapeHtml(tournament.game)} · ${escapeHtml(tournament.format)} · ${escapeHtml(tournament.organizer?.display_name || "Organizer")}</p><small>${tournament.participant_limit ? `Limit ${tournament.participant_limit} entries` : "Open participant limit"}${tournament.prize_description && tournament.prize_verified_at ? ` · Verified prize: ${escapeHtml(tournament.prize_description)}` : ""}</small><a class="button primary compact" href="${escapeHtml(url)}">View tournament</a>${shareActions(url, `${tournament.name} on GameHub Africa`, "Check out this gaming tournament on GameHub Africa. View the details and register if you're eligible.")}</div></article>`;
+  }).join("")}</div>`;
+  bindShareActions(container);
 }
 
 async function loadPublicProducts(container) {
@@ -1253,8 +1469,10 @@ async function renderHome(content) {
 function renderProfile(content) {
   const avatarUrl = currentProfile.avatar_path ? supabase.storage.from("gamehub-avatars").getPublicUrl(currentProfile.avatar_path).data.publicUrl : "";
   const bannerUrl = currentProfile.banner_path ? supabase.storage.from("gamehub-avatars").getPublicUrl(currentProfile.banner_path).data.publicUrl : "";
-  content.innerHTML = `${pageHeader("PLAYER PROFILE", "Your profile", "The identity other players see on GameHub.")}<div class="profile-card"><div class="profile-cover">${bannerUrl ? `<img class="profile-cover-image" src="${escapeHtml(bannerUrl)}" alt="" />` : ""}</div><div class="profile-details"><span class="avatar profile-avatar ${profileCosmeticClass(currentProfile.profile_cosmetic_key)}">${avatarUrl ? `<img src="${escapeHtml(avatarUrl)}" alt="" />` : escapeHtml(initials(currentProfile.display_name))}</span><div class="profile-name"><h2>${escapeHtml(currentProfile.display_name)}</h2><span>@${escapeHtml(currentProfile.username)}</span></div><p class="profile-bio">${escapeHtml(currentProfile.bio || "Add a bio to tell other players a little about you.")}</p><div class="profile-meta"><span>${escapeHtml(countryName(currentProfile.country_code))}</span><span>${currentProfile.preferred_language === "sw" ? "Kiswahili" : "English"}</span><span>${currentProfile.profile_visibility === "private" ? "Private profile" : "Public profile"}</span></div><button class="button secondary" data-action="edit-profile">Edit profile</button></div></div><div id="profile-style-settings"></div><div id="profile-editor"></div><div class="section-heading"><div><p class="eyebrow">YOUR GAMING SETUP</p><h2>Favourite games</h2></div></div><div id="profile-games" class="tag-row"></div>`;
+  const publicUrl = publicShareUrl(`/@${encodeURIComponent(currentProfile.username)}`);
+  content.innerHTML = `${pageHeader("PLAYER PROFILE", "Your profile", "The identity other players see on GameHub.")}<div class="profile-card"><div class="profile-cover">${bannerUrl ? `<img class="profile-cover-image" src="${escapeHtml(bannerUrl)}" alt="" />` : ""}</div><div class="profile-details"><span class="avatar profile-avatar ${profileCosmeticClass(currentProfile.profile_cosmetic_key)}">${avatarUrl ? `<img src="${escapeHtml(avatarUrl)}" alt="" />` : escapeHtml(initials(currentProfile.display_name))}</span><div class="profile-name"><h2>${escapeHtml(currentProfile.display_name)}</h2><span>@${escapeHtml(currentProfile.username)}</span></div><p class="profile-bio">${escapeHtml(currentProfile.bio || "Add a bio to tell other players a little about you.")}</p><div class="profile-meta"><span>${escapeHtml(countryName(currentProfile.country_code))}</span><span>${currentProfile.preferred_language === "sw" ? "Kiswahili" : "English"}</span><span>${currentProfile.profile_visibility === "private" ? "Private profile" : "Public profile"}</span></div><button class="button secondary" data-action="edit-profile">Edit profile</button>${currentProfile.profile_visibility === "private" ? `<p class="muted-small">Your profile is private, so sharing is turned off.</p>` : shareActions(publicUrl, `${currentProfile.display_name} on GameHub Africa`, "Check out my gaming profile on GameHub Africa. Let's connect and play together!")}</div></div><div id="profile-style-settings"></div><div id="profile-editor"></div><div class="section-heading"><div><p class="eyebrow">YOUR GAMING SETUP</p><h2>Favourite games</h2></div></div><div id="profile-games" class="tag-row"></div>`;
   content.querySelector('[data-action="edit-profile"]').addEventListener("click", () => renderProfileEditor(content.querySelector("#profile-editor")));
+  bindShareActions(content);
   renderProfileStyleSettings(content.querySelector("#profile-style-settings"));
   loadUserGames(content.querySelector("#profile-games"), currentUser.id);
 }
@@ -1279,7 +1497,7 @@ async function renderProfileStyleSettings(container) {
     });
     if (equipError) {
       control.disabled = false;
-      return setNotice(notice, `We couldn't apply that style: ${equipError.message}`);
+      return showErrorNotice(notice, equipError, "We couldn't apply that style.");
     }
     await loadProfile();
     renderPage();
@@ -1329,7 +1547,7 @@ function renderProfileEditor(container) {
         }
         submit.disabled = false;
         submit.textContent = "Save changes";
-        setNotice(container.querySelector("#profile-error"), `${image.label} upload failed: ${upload.error.message}`);
+        showErrorNotice(container.querySelector("#profile-error"), upload.error, `${image.label} upload failed.`);
         return;
       }
       uploadedPaths.push(path);
@@ -1343,7 +1561,7 @@ function renderProfileEditor(container) {
       }
       submit.disabled = false;
       submit.textContent = "Save changes";
-      setNotice(container.querySelector("#profile-error"), `We couldn't save your changes: ${error.message}`);
+      showErrorNotice(container.querySelector("#profile-error"), error, "We couldn't save your changes.");
       return;
     }
     await loadProfile();
@@ -1473,17 +1691,17 @@ async function handleSocialAction(control, container) {
   control.disabled = false;
   if (error) {
     console.error("Social action failed:", error);
-    setSocialNotice(container, error.message);
+    setSocialNotice(container, error);
   }
 }
 
-function setSocialNotice(container, message) {
+function setSocialNotice(container, error) {
   let notice = container.querySelector("[data-social-notice]");
   if (!notice) {
     container.insertAdjacentHTML("afterbegin", `<div class="notice error" data-social-notice></div>`);
     notice = container.querySelector("[data-social-notice]");
   }
-  setNotice(notice, message);
+  showErrorNotice(notice, error, "This action did not complete.");
 }
 
 async function renderLive(content) {
@@ -1518,7 +1736,7 @@ async function renderLive(content) {
     if (error) {
       submit.disabled = false;
       submit.textContent = "Submit for review";
-      return setNotice(notice, `Could not submit the stream: ${error.message}`);
+      return showErrorNotice(notice, error, "Could not submit the stream.");
     }
     event.currentTarget.reset();
     submit.disabled = false;
@@ -1575,7 +1793,7 @@ async function loadStreams(container, game, searchTerm = "") {
       : await supabase.from("stream_follows").insert({ stream_id: control.dataset.followStream, user_id: currentUser.id });
     if (result.error) {
       control.disabled = false;
-      return setNotice(document.querySelector("#stream-list-error"), `Could not update stream follow: ${result.error.message}`);
+      return showErrorNotice(document.querySelector("#stream-list-error"), result.error, "Could not update stream follow.");
     }
     await loadStreams(container, game, searchTerm);
   }));
@@ -1601,7 +1819,8 @@ async function openStream(streamId) {
       reason: reason.trim(),
     });
     control.disabled = false;
-    setNotice(detail.querySelector("#stream-report-notice"), reportError ? `Report not submitted: ${reportError.message}` : "Report sent to moderators.", reportError ? "error" : "success");
+    if (reportError) showErrorNotice(detail.querySelector("#stream-report-notice"), reportError, "Report not submitted.");
+    else setNotice(detail.querySelector("#stream-report-notice"), "Report sent to moderators.", "success");
   });
   await loadStreamChat(stream.id, detail.querySelector("#stream-chat-history"));
   const channel = supabase.channel(`stream-chat-${stream.id}`).on("postgres_changes", {
@@ -1618,7 +1837,7 @@ async function openStream(streamId) {
     const { error: sendError } = await supabase.from("stream_chat_messages").insert({ stream_id: stream.id, user_id: currentUser.id, body });
     submit.disabled = false;
     if (sendError) {
-      setNotice(detail.querySelector("#stream-chat-error"), `Message not sent: ${sendError.message}`);
+      showErrorNotice(detail.querySelector("#stream-chat-error"), sendError, "Message not sent.");
       return;
     }
     input.value = "";
@@ -1653,7 +1872,7 @@ async function renderTournaments(content) {
     };
     const { error: createError } = await supabase.from("tournaments").insert(row);
     submit.disabled = false;
-    if (createError) return setNotice(content.querySelector("#tournament-error"), `Could not create tournament: ${createError.message}`);
+    if (createError) return showErrorNotice(content.querySelector("#tournament-error"), createError, "Could not create tournament.");
     setNotice(content.querySelector("#tournament-error"), "Draft saved. You can publish it below once the details are ready.", "success");
     await loadTournamentList(content.querySelector("#tournament-results"));
   });
@@ -1661,7 +1880,7 @@ async function renderTournaments(content) {
 }
 
 async function loadTournamentList(container) {
-  const { data, error } = await supabase.from("tournaments").select("id, organizer_id, name, game, format, rules, status, starts_at, registration_deadline, participant_limit, prize_description, prize_verified_at, organizer:profiles!tournaments_organizer_id_fkey(username, display_name)").order("starts_at", { ascending: true }).limit(50);
+  const { data, error } = await supabase.from("tournaments").select("id, organizer_id, name, game, format, rules, status, share_code, starts_at, registration_deadline, participant_limit, prize_description, prize_verified_at, organizer:profiles!tournaments_organizer_id_fkey(username, display_name)").order("starts_at", { ascending: true }).limit(50);
   if (error) return renderDataError(container, error, () => loadTournamentList(container));
   if (!data.length) {
     container.innerHTML = `<div class="empty-state"><span class="empty-icon">${icons.tournaments}</span><h2>No tournaments listed yet</h2><p>Verified tournament listings will show here when organizers publish them.</p></div>`;
@@ -1682,8 +1901,14 @@ async function loadTournamentList(container) {
     const canJoin = tournament.status === "registration_open" && (!tournament.registration_deadline || new Date(tournament.registration_deadline) > new Date());
     const teamRegistrations = registrations.filter((item) => item.tournament_id === tournament.id && item.team_id);
     const hasMyTeam = teamRegistrations.some((item) => myTeams.some((team) => team.id === item.team_id) && item.status === "registered");
-    return `<article class="tournament-card"><div class="tournament-date"><strong>${datePart(tournament.starts_at, { day: "2-digit" })}</strong><span>${datePart(tournament.starts_at, { month: "short" })}</span></div><div class="tournament-info"><span class="status-tag">${escapeHtml(tournament.status.replaceAll("_", " "))}</span><h3>${escapeHtml(tournament.name)}</h3><p>${escapeHtml(tournament.game)} · ${escapeHtml(tournament.format)} · ${escapeHtml(tournament.organizer?.display_name || "Organizer")}</p><p>${escapeHtml(tournament.rules || "Rules to be announced by the organizer.")}</p><small>${tournament.participant_limit ? `Limit ${tournament.participant_limit} entries` : "Open participant limit"}${tournament.prize_description && tournament.prize_verified_at ? ` · Verified prize: ${escapeHtml(tournament.prize_description)}` : ""}</small><div class="card-actions">${joined ? `<button class="button secondary compact" data-tournament-cancel="${tournament.id}">Cancel registration</button>` : canJoin ? `<button class="button primary compact" data-tournament-join="${tournament.id}">Register individually</button>` : ""}${canJoin && myTeams.length && !hasMyTeam ? `<select aria-label="Choose team to register" data-team-choice="${tournament.id}">${myTeams.map((team) => `<option value="${team.id}">${escapeHtml(team.name)}</option>`).join("")}</select><button class="button secondary compact" data-tournament-team="${tournament.id}">Register team</button>` : ""}${isOwner && tournament.status === "draft" ? `<button class="button secondary compact" data-tournament-publish="${tournament.id}">Open registration</button>` : ""}${isOwner ? `<button class="button secondary compact" data-manage-bracket="${tournament.id}">Manage matches</button>` : ""}</div><div data-bracket="${tournament.id}"></div></div></article>`;
+    const shareLink = tournament.status === "draft" ? "" : shareActions(
+      publicShareUrl(`/tournaments/${slugify(tournament.name)}-${tournament.share_code}`),
+      `${tournament.name} on GameHub Africa`,
+      "Check out this gaming tournament on GameHub Africa. View the details and register if you're eligible.",
+    );
+    return `<article class="tournament-card"><div class="tournament-date"><strong>${datePart(tournament.starts_at, { day: "2-digit" })}</strong><span>${datePart(tournament.starts_at, { month: "short" })}</span></div><div class="tournament-info"><span class="status-tag">${escapeHtml(tournament.status.replaceAll("_", " "))}</span><h3>${escapeHtml(tournament.name)}</h3><p>${escapeHtml(tournament.game)} · ${escapeHtml(tournament.format)} · ${escapeHtml(tournament.organizer?.display_name || "Organizer")}</p><p>${escapeHtml(tournament.rules || "Rules to be announced by the organizer.")}</p><small>${tournament.participant_limit ? `Limit ${tournament.participant_limit} entries` : "Open participant limit"}${tournament.prize_description && tournament.prize_verified_at ? ` · Verified prize: ${escapeHtml(tournament.prize_description)}` : ""}</small><div class="card-actions">${joined ? `<button class="button secondary compact" data-tournament-cancel="${tournament.id}">Cancel registration</button>` : canJoin ? `<button class="button primary compact" data-tournament-join="${tournament.id}">Register individually</button>` : ""}${canJoin && myTeams.length && !hasMyTeam ? `<select aria-label="Choose team to register" data-team-choice="${tournament.id}">${myTeams.map((team) => `<option value="${team.id}">${escapeHtml(team.name)}</option>`).join("")}</select><button class="button secondary compact" data-tournament-team="${tournament.id}">Register team</button>` : ""}${isOwner && tournament.status === "draft" ? `<button class="button secondary compact" data-tournament-publish="${tournament.id}">Open registration</button>` : ""}${isOwner ? `<button class="button secondary compact" data-manage-bracket="${tournament.id}">Manage matches</button>` : ""}</div>${shareLink}<div data-bracket="${tournament.id}"></div></div></article>`;
   }).join("");
+  bindShareActions(container);
   container.querySelectorAll("[data-tournament-join]").forEach((control) => control.addEventListener("click", async () => {
     control.disabled = true;
     const { error: joinError } = await supabase.rpc("register_for_tournament", { requested_tournament_id: control.dataset.tournamentJoin });
@@ -1788,7 +2013,7 @@ async function renderCommunities(content) {
       status: "active",
     });
     submit.disabled = false;
-    if (createError) return setNotice(content.querySelector("#community-error"), `Could not create community: ${createError.message}`);
+    if (createError) return showErrorNotice(content.querySelector("#community-error"), createError, "Could not create community.");
     setNotice(content.querySelector("#community-error"), "Community created. You are its owner.", "success");
     await loadCommunities(content.querySelector("#community-results"));
   });
@@ -1796,7 +2021,7 @@ async function renderCommunities(content) {
 }
 
 async function loadCommunities(container) {
-  const { data, error } = await supabase.from("communities").select("id, owner_id, name, description, game, community_members(count)").eq("visibility", "public").eq("status", "active").order("created_at", { ascending: false }).limit(24);
+  const { data, error } = await supabase.from("communities").select("id, owner_id, name, description, game, share_code, community_members(count)").eq("visibility", "public").eq("status", "active").order("created_at", { ascending: false }).limit(24);
   if (error) return renderDataError(container, error, () => loadCommunities(container));
   if (!data.length) {
     container.innerHTML = `<div class="empty-state"><span class="empty-icon">${icons.communities}</span><h2>Your community is waiting to be built</h2><p>Public gaming communities will appear here when they’re created.</p></div>`;
@@ -1804,7 +2029,11 @@ async function loadCommunities(container) {
   }
   const memberships = await supabase.from("community_members").select("community_id").eq("user_id", currentUser.id).in("community_id", data.map((community) => community.id));
   const joinedIds = new Set((memberships.data || []).map((item) => item.community_id));
-  container.innerHTML = data.map((community) => `<article class="community-card"><span class="quick-icon">${icons.communities}</span><small>${escapeHtml(community.game || "Gaming")}</small><h3>${escapeHtml(community.name)}</h3><p>${escapeHtml(community.description || "A place for players to connect.")}</p><span class="muted-small">${community.community_members?.[0]?.count ?? 0} members</span><div class="card-actions"><button class="button secondary compact" data-community-open="${community.id}">Open</button>${joinedIds.has(community.id) ? `<span class="muted-small">Joined</span>` : `<button class="button primary compact" data-community-join="${community.id}">Join</button>`}</div></article>`).join("");
+  container.innerHTML = data.map((community) => {
+    const url = publicShareUrl(`/communities/${slugify(community.name)}-${community.share_code}`);
+    return `<article class="community-card"><span class="quick-icon">${icons.communities}</span><small>${escapeHtml(community.game || "Gaming")}</small><h3>${escapeHtml(community.name)}</h3><p>${escapeHtml(community.description || "A place for players to connect.")}</p><span class="muted-small">${community.community_members?.[0]?.count ?? 0} members</span><div class="card-actions"><button class="button secondary compact" data-community-open="${community.id}">Open</button>${joinedIds.has(community.id) ? `<span class="muted-small">Joined</span>` : `<button class="button primary compact" data-community-join="${community.id}">Join</button>`}</div>${shareActions(url, `${community.name} on GameHub Africa`, "Join our gaming community on GameHub Africa. Find gamers, share updates, and connect with the team.")}</article>`;
+  }).join("");
+  bindShareActions(container);
   container.querySelectorAll("[data-community-open]").forEach((control) => control.addEventListener("click", () => {
     selectedCommunityId = control.dataset.communityOpen;
     renderCommunityDetail(document.querySelector("#page-content"), selectedCommunityId);
@@ -1821,12 +2050,14 @@ async function loadCommunities(container) {
 }
 
 async function renderCommunityDetail(content, communityId) {
-  const { data: community, error } = await supabase.from("communities").select("id, owner_id, name, description, game, rules").eq("id", communityId).single();
+  const { data: community, error } = await supabase.from("communities").select("id, owner_id, name, description, game, rules, visibility, status, share_code").eq("id", communityId).single();
   if (error) return renderDataError(content, error, () => renderCommunityDetail(content, communityId));
   const membership = await supabase.from("community_members").select("community_id").eq("community_id", communityId).eq("user_id", currentUser.id).maybeSingle();
   if (membership.error) return renderDataError(content, membership.error, () => renderCommunityDetail(content, communityId));
   const isMember = Boolean(membership.data);
-  content.innerHTML = `${pageHeader(escapeHtml(community.game || "COMMUNITY"), escapeHtml(community.name), escapeHtml(community.description))}<button class="button secondary compact" data-action="back-communities">← All communities</button>${isMember ? `<details class="form-disclosure"><summary>Post to this community</summary><form id="community-post-form" class="edit-card"><div id="post-error" class="notice" role="alert" hidden></div><label for="post-body">Your post</label><textarea id="post-body" maxlength="5000" rows="4" required></textarea><button class="button primary" type="submit">Publish post</button></form></details>` : `<p class="muted-small">Join this community to post and comment.</p><button class="button primary compact" data-action="detail-join">Join community</button>`}<p class="muted-small">${escapeHtml(community.rules || "Community guidelines: be respectful and follow the platform rules.")}</p><div id="community-posts" class="post-list"></div>`;
+  const publicUrl = publicShareUrl(`/communities/${slugify(community.name)}-${community.share_code}`);
+  content.innerHTML = `${pageHeader(escapeHtml(community.game || "COMMUNITY"), escapeHtml(community.name), escapeHtml(community.description))}<button class="button secondary compact" data-action="back-communities">← All communities</button>${community.visibility === "public" && community.status === "active" ? shareActions(publicUrl, `${community.name} on GameHub Africa`, "Join our gaming community on GameHub Africa. Find gamers, share updates, and connect with the team.") : ""}${isMember ? `<details class="form-disclosure"><summary>Post to this community</summary><form id="community-post-form" class="edit-card"><div id="post-error" class="notice" role="alert" hidden></div><label for="post-body">Your post</label><textarea id="post-body" maxlength="5000" rows="4" required></textarea><button class="button primary" type="submit">Publish post</button></form></details>` : `<p class="muted-small">Join this community to post and comment.</p><button class="button primary compact" data-action="detail-join">Join community</button>`}<p class="muted-small">${escapeHtml(community.rules || "Community guidelines: be respectful and follow the platform rules.")}</p><div id="community-posts" class="post-list"></div>`;
+  bindShareActions(content);
   content.querySelector('[data-action="back-communities"]').addEventListener("click", () => {
     selectedCommunityId = null;
     renderCommunities(content);
@@ -1836,7 +2067,7 @@ async function renderCommunityDetail(content, communityId) {
     const { error: joinError } = await supabase.from("community_members").insert({ community_id: communityId, user_id: currentUser.id, role: "member" });
     if (joinError) {
       event.currentTarget.disabled = false;
-      return setNotice(content.querySelector(".muted-small"), `Couldn't join: ${joinError.message}`);
+      return showErrorNotice(content.querySelector(".muted-small"), joinError, "Couldn't join the community.");
     }
     await renderCommunityDetail(content, communityId);
   });
@@ -1847,7 +2078,7 @@ async function renderCommunityDetail(content, communityId) {
     submit.disabled = true;
     const { error: postError } = await supabase.from("community_posts").insert({ community_id: communityId, author_id: currentUser.id, body });
     submit.disabled = false;
-    if (postError) return setNotice(content.querySelector("#post-error"), `Post could not be published: ${postError.message}`);
+    if (postError) return showErrorNotice(content.querySelector("#post-error"), postError, "Post could not be published.");
     content.querySelector("#post-body").value = "";
     await loadCommunityPosts(communityId, content.querySelector("#community-posts"), true);
   });
@@ -1938,7 +2169,7 @@ async function openConversation(content, conversationId) {
     });
     submit.disabled = false;
     submit.textContent = "Send";
-    if (sendError) return setNotice(thread.querySelector("#message-error"), `Message not sent: ${sendError.message}`);
+    if (sendError) return showErrorNotice(thread.querySelector("#message-error"), sendError, "Message not sent.");
     input.value = "";
     await loadMessages(conversationId, history);
   });
@@ -1972,7 +2203,7 @@ async function loadMessages(conversationId, container, offset = 0, prepend = fal
 }
 
 async function renderTeams(content) {
-  content.innerHTML = `${pageHeader("SQUAD UP", "Teams.", "Build a roster around the games you play.")}<details class="form-disclosure"><summary>Create a team</summary><form id="team-form" class="edit-card"><div id="team-error" class="notice" role="alert" hidden></div><label for="team-name">Team name</label><input id="team-name" name="name" maxlength="80" required /><label for="team-game">Game</label><input id="team-game" name="game" maxlength="100" required /><label for="team-description">Description</label><textarea id="team-description" name="description" maxlength="1000" rows="3"></textarea><button class="button primary" type="submit">Create team</button></form></details><div id="team-invitations"></div><div id="team-results" class="community-grid"><div class="skeleton-card"></div></div>`;
+  content.innerHTML = `${pageHeader("SQUAD UP", "Teams.", "Build a roster around the games you play.")}<details class="form-disclosure"><summary>Create a team</summary><form id="team-form" class="edit-card"><div id="team-error" class="notice" role="alert" hidden></div><label for="team-name">Team name</label><input id="team-name" name="name" maxlength="80" required /><label for="team-game">Game</label><input id="team-game" name="game" maxlength="100" required /><label for="team-description">Description</label><textarea id="team-description" name="description" maxlength="1000" rows="3"></textarea><label for="team-visibility">Team page visibility</label><select id="team-visibility" name="visibility"><option value="public">Public — shareable team page</option><option value="private">Private — members only</option></select><button class="button primary" type="submit">Create team</button></form></details><div id="team-invitations"></div><div id="team-results" class="community-grid"><div class="skeleton-card"></div></div>`;
   content.querySelector("#team-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -1983,9 +2214,10 @@ async function renderTeams(content) {
       name: String(form.get("name")).trim(),
       game: String(form.get("game")).trim(),
       description: String(form.get("description")).trim(),
+      visibility: String(form.get("visibility")),
     });
     submit.disabled = false;
-    if (error) return setNotice(content.querySelector("#team-error"), `Could not create the team: ${error.message}`);
+    if (error) return showErrorNotice(content.querySelector("#team-error"), error, "Could not create the team.");
     setNotice(content.querySelector("#team-error"), "Team created. You are the captain.", "success");
     await loadTeams(content);
   });
@@ -2010,14 +2242,20 @@ async function loadTeams(content) {
     await loadTeams(content);
   }));
 
-  const result = await supabase.from("teams").select("id, captain_id, name, description, game, team_members(count)").order("created_at", { ascending: false }).limit(30);
+  const result = await supabase.from("teams").select("id, captain_id, name, description, game, share_code, visibility, team_members(count)").order("created_at", { ascending: false }).limit(30);
   const container = content.querySelector("#team-results");
   if (result.error) return renderDataError(container, result.error, () => loadTeams(content));
   if (!result.data.length) {
     container.innerHTML = `<div class="empty-state"><span class="empty-icon">${icons.teams}</span><h2>No teams yet</h2><p>Create one or accept an invitation to join your first squad.</p></div>`;
     return;
   }
-  container.innerHTML = result.data.map((team) => `<article class="community-card"><span class="quick-icon">${icons.teams}</span><small>${escapeHtml(team.game || "Gaming")}</small><h3>${escapeHtml(team.name)}</h3><p>${escapeHtml(team.description || "A team for players.")}</p><span class="muted-small">${team.team_members?.[0]?.count || 0} members · ${team.captain_id === currentUser.id ? "Captain" : "Member"}</span>${team.captain_id === currentUser.id ? `<form class="invite-form" data-team="${team.id}"><label>Invite by username</label><div class="inline-form"><input name="username" maxlength="24" placeholder="gamer_tag" required /><button class="button secondary compact" type="submit">Invite</button></div><div class="notice" role="alert" hidden></div></form>` : ""}</article>`).join("");
+  container.innerHTML = result.data.map((team) => {
+    const shareLink = team.visibility === "public"
+      ? shareActions(publicShareUrl(`/teams/${slugify(team.name)}-${team.share_code}`), `${team.name} on GameHub Africa`, "Meet this gaming team on GameHub Africa. Connect with the captain to ask about joining.")
+      : `<p class="muted-small">Private team · share link unavailable</p>`;
+    return `<article class="community-card"><span class="quick-icon">${icons.teams}</span><small>${escapeHtml(team.game || "Gaming")}</small><h3>${escapeHtml(team.name)}</h3><p>${escapeHtml(team.description || "A team for players.")}</p><span class="muted-small">${team.team_members?.[0]?.count || 0} members · ${team.captain_id === currentUser.id ? "Captain" : "Member"} · ${team.visibility === "public" ? "Public" : "Private"}</span>${team.captain_id === currentUser.id ? `<form class="invite-form" data-team="${team.id}"><label>Invite by username</label><div class="inline-form"><input name="username" maxlength="24" placeholder="gamer_tag" required /><button class="button secondary compact" type="submit">Invite</button></div><div class="notice" role="alert" hidden></div></form>` : ""}${shareLink}</article>`;
+  }).join("");
+  bindShareActions(container);
   container.querySelectorAll(".invite-form").forEach((form) => form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const input = form.querySelector("input");
@@ -2026,11 +2264,12 @@ async function loadTeams(content) {
     const target = await supabase.from("profiles").select("id").eq("username", normalizeUsername(input.value)).maybeSingle();
     if (target.error || !target.data) {
       submit.disabled = false;
-      return setNotice(form.querySelector(".notice"), target.error?.message || "No public player has that username.");
+      if (target.error) return showErrorNotice(form.querySelector(".notice"), target.error, "Could not find that player.");
+      return setNotice(form.querySelector(".notice"), "No public player has that username.");
     }
     const { error } = await supabase.rpc("invite_team_member", { requested_team_id: form.dataset.team, requested_invitee_id: target.data.id });
     submit.disabled = false;
-    if (error) return setNotice(form.querySelector(".notice"), error.message);
+    if (error) return showErrorNotice(form.querySelector(".notice"), error, "Could not send the invitation.");
     setNotice(form.querySelector(".notice"), "Invitation sent.", "success");
     input.value = "";
   }));
@@ -2053,7 +2292,7 @@ async function renderCalls(content) {
     const { data: profiles, error: lookupError } = await supabase.from("profiles").select("id, username").in("username", usernames);
     if (lookupError) {
       submit.disabled = false;
-      return setNotice(content.querySelector("#call-page-error"), lookupError.message);
+      return showErrorNotice(content.querySelector("#call-page-error"), lookupError, "Could not find the invited players.");
     }
     if (profiles.length !== usernames.length) {
       submit.disabled = false;
@@ -2065,7 +2304,7 @@ async function renderCalls(content) {
       requested_title: content.querySelector("#group-title").value.trim(),
     });
     submit.disabled = false;
-    if (error) return setNotice(content.querySelector("#call-page-error"), error.message);
+    if (error) return showErrorNotice(content.querySelector("#call-page-error"), error, "Could not start the group call.");
     content.querySelector("#group-players").value = "";
     await refreshCallLists(content);
     await connectToCall(callId, false, "group_voice");
@@ -2079,7 +2318,7 @@ async function renderCalls(content) {
       requested_title: content.querySelector("#voice-room-title").value.trim(),
     });
     submit.disabled = false;
-    if (error) return setNotice(content.querySelector("#call-page-error"), error.message);
+    if (error) return showErrorNotice(content.querySelector("#call-page-error"), error, "Could not create the voice room.");
     content.querySelector("#voice-room-title").value = "";
     await refreshCallLists(content);
     await connectToCall(callId, false, "voice_room");
@@ -2149,7 +2388,7 @@ async function refreshCallLists(content) {
     const { error } = await supabase.rpc("join_voice_room", { requested_call_id: control.dataset.joinRoom });
     if (error) {
       control.disabled = false;
-      return setNotice(content.querySelector("#call-page-error"), error.message);
+      return showErrorNotice(content.querySelector("#call-page-error"), error, "Could not join the voice room.");
     }
     await connectToCall(control.dataset.joinRoom, false, "voice_room");
     await refreshCallLists(content);
@@ -2188,7 +2427,7 @@ async function handleCallAction(control, content) {
   });
   if (error) {
     control.disabled = false;
-    return setNotice(content.querySelector("#call-page-error"), error.message);
+    return showErrorNotice(content.querySelector("#call-page-error"), error, "Could not update the call.");
   }
   if (action === "accept") await connectToCall(callId, control.dataset.callType === "video", control.dataset.callType);
   else if (activeCallId === callId) await disconnectActiveCall();
@@ -2226,7 +2465,11 @@ async function connectToCall(callId, enableVideo = false, callTypeHint = null) {
       body: JSON.stringify({ callId }),
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "A secure call connection could not be prepared.");
+    if (!response.ok) {
+      const error = new Error(result.error || "A secure call connection could not be prepared.");
+      error.status = response.status;
+      throw error;
+    }
     if (result.serverUrl !== liveKitServerUrl) throw new Error("The configured LiveKit server URL does not match this deployment.");
 
     const { Room, RoomEvent, Track } = await import("livekit-client");
@@ -2268,7 +2511,7 @@ async function connectToCall(callId, enableVideo = false, callTypeHint = null) {
     activeCallType = null;
     activeLiveKitTrack = null;
     activeCallNames.clear();
-    if (errorNotice) setNotice(errorNotice, `Call could not connect: ${error.message}`);
+    if (errorNotice) showErrorNotice(errorNotice, error, "Call could not connect.");
     if (stageHost?.querySelector("#call-stage")) {
       const failedStage = stageHost.querySelector("#call-stage");
       failedStage.innerHTML = `<div class="notice" role="alert">Call not connected. Check microphone/camera permission, network access and LiveKit configuration. No media was sent through GameHub messaging.</div><button class="button secondary compact" data-dismiss-call-error>Dismiss</button>`;
@@ -2292,7 +2535,7 @@ function renderCallStage(room) {
   stage.querySelector('[data-action="hangup-call"]').addEventListener("click", async () => {
     const action = ["voice_room", "group_voice"].includes(activeCallType) ? "leave" : "end";
     const { error } = await supabase.rpc("respond_to_call", { requested_call_id: activeCallId, requested_action: action });
-    if (error) return setNotice(stage.querySelector("#call-media-error"), `Could not end the call: ${error.message}`);
+    if (error) return showErrorNotice(stage.querySelector("#call-media-error"), error, "Could not end the call.");
     await disconnectActiveCall();
     if (document.querySelector("#call-list")) await refreshCallLists(document.querySelector("#page-content"));
   });
@@ -2310,7 +2553,11 @@ function renderCallStage(room) {
         body: JSON.stringify({ callId: activeCallId }),
       });
       const tokenResult = await response.json();
-      if (!response.ok) throw new Error(tokenResult.error || "Could not refresh the call token.");
+      if (!response.ok) {
+        const error = new Error(tokenResult.error || "Could not refresh the call token.");
+        error.status = response.status;
+        throw error;
+      }
       if (tokenResult.serverUrl !== liveKitServerUrl) throw new Error("The configured LiveKit server URL does not match this deployment.");
       await room.disconnect();
       await room.connect(tokenResult.serverUrl, tokenResult.token);
@@ -2322,7 +2569,7 @@ function renderCallStage(room) {
         : "Connected to media server · waiting for participants";
     } catch (error) {
       status.textContent = "Reconnect failed";
-      setNotice(stage.querySelector("#call-media-error"), error.message);
+      showErrorNotice(stage.querySelector("#call-media-error"), error, "Reconnect failed.");
     } finally {
       reconnect.disabled = false;
     }
@@ -2334,7 +2581,7 @@ function renderCallStage(room) {
       activeCallMicrophoneEnabled = enabled;
       event.currentTarget.textContent = enabled ? "Mute microphone" : "Unmute microphone";
     } catch (error) {
-      setNotice(stage.querySelector("#call-media-error"), `Microphone could not be changed: ${error.message}`);
+      showErrorNotice(stage.querySelector("#call-media-error"), error, "Microphone could not be changed.");
     }
   });
   stage.querySelector('[data-action="toggle-camera"]').addEventListener("click", async (event) => {
@@ -2345,7 +2592,7 @@ function renderCallStage(room) {
       renderCallParticipants(room);
     } catch (error) {
       activeCallVideo = false;
-      setNotice(stage.querySelector("#call-media-error"), `Camera could not be enabled: ${error.message}`);
+      showErrorNotice(stage.querySelector("#call-media-error"), error, "Camera could not be enabled.");
     }
   });
   renderCallParticipants(room);
@@ -2462,7 +2709,7 @@ function notificationText(notice) {
 async function renderSettings(content) {
   content.innerHTML = `${pageHeader("YOUR ACCOUNT", "Settings.", "Control your privacy, messages and account data.")}<form id="settings-form" class="edit-card"><div id="settings-error" class="notice" role="alert" hidden></div><label for="message-privacy">Who can message you</label><select id="message-privacy"><option value="everyone">Everyone</option><option value="followers">People you follow</option><option value="nobody">Nobody</option></select><label for="call-privacy">Who can call you</label><select id="call-privacy"><option value="everyone">Everyone</option><option value="followers">People you follow</option><option value="nobody">Nobody</option></select><label for="timezone">Timezone</label><select id="timezone"><option value="Africa/Nairobi">East Africa Time (Nairobi)</option><option value="Africa/Kampala">East Africa Time (Kampala)</option><option value="Africa/Dar_es_Salaam">East Africa Time (Dar es Salaam)</option><option value="UTC">UTC</option></select><label class="check-label"><input id="in-app-notifications" type="checkbox" checked /><span>In-app notifications</span></label><label class="check-label"><input id="email-notifications" type="checkbox" /><span>Email notifications (requires configured mail delivery)</span></label><button class="button primary" type="submit">Save preferences</button></form><div class="edit-card"><h2>Favourite games</h2><form id="game-form" class="inline-form"><label class="sr-only" for="favorite-game">Add a game</label><input id="favorite-game" maxlength="100" placeholder="Game title" required /><select id="favorite-platform" aria-label="Platform"><option value="">Any platform</option><option value="pc">PC</option><option value="playstation">PlayStation</option><option value="xbox">Xbox</option><option value="mobile">Mobile</option><option value="other">Other</option></select><button class="button secondary" type="submit">Add</button></form><div id="settings-games" class="tag-row"></div></div><div class="edit-card"><h2>Your account data</h2><p class="muted">Download a JSON copy of the personal data associated with your account.</p><button class="button secondary" data-action="export-account">Download my data</button></div><div class="edit-card danger-card"><h2>Delete your account</h2><p class="muted">This permanently removes your profile and personal data. Financial records may be retained as required by law.</p><button class="button danger" data-action="delete-account">Request account deletion</button><div id="delete-error" class="notice" role="alert" hidden></div></div>`;
   const { data, error } = await supabase.from("user_preferences").select("*").eq("user_id", currentUser.id).maybeSingle();
-  if (error) return setNotice(content.querySelector("#settings-error"), error.message);
+  if (error) return showErrorNotice(content.querySelector("#settings-error"), error, "Could not load your settings.");
   if (data) {
     content.querySelector("#message-privacy").value = data.message_privacy;
     content.querySelector("#call-privacy").value = data.call_privacy || "everyone";
@@ -2483,7 +2730,8 @@ async function renderSettings(content) {
       email_notifications: content.querySelector("#email-notifications").checked,
     });
     submit.disabled = false;
-    setNotice(content.querySelector("#settings-error"), saveError ? saveError.message : "Preferences saved.", saveError ? "error" : "success");
+    if (saveError) showErrorNotice(content.querySelector("#settings-error"), saveError, "Could not save your preferences.");
+    else setNotice(content.querySelector("#settings-error"), "Preferences saved.", "success");
   });
   const games = content.querySelector("#settings-games");
   await loadUserGames(games, currentUser.id, true);
@@ -2502,7 +2750,7 @@ async function renderSettings(content) {
       game: game.value.trim(),
       platform: content.querySelector("#favorite-platform").value || null,
     });
-    if (addError) return setNotice(content.querySelector("#settings-error"), addError.message);
+    if (addError) return showErrorNotice(content.querySelector("#settings-error"), addError, "Could not add that game.");
     game.value = "";
     await loadUserGames(games, currentUser.id, true);
   });
@@ -2511,9 +2759,9 @@ async function renderSettings(content) {
     control.disabled = true;
     const { data: exportData, error: exportError } = await supabase.rpc("export_account_data");
     control.disabled = false;
-    if (exportError) return setNotice(content.querySelector("#settings-error"), `Could not export your account data: ${exportError.message}`);
+    if (exportError) return showErrorNotice(content.querySelector("#settings-error"), exportError, "Could not export your account data.");
     const { data: callsData, error: callsError } = await supabase.rpc("export_voice_call_data");
-    if (callsError) return setNotice(content.querySelector("#settings-error"), `Could not export your call history: ${callsError.message}`);
+    if (callsError) return showErrorNotice(content.querySelector("#settings-error"), callsError, "Could not export your call history.");
     exportData.voice_calls = callsData;
     const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" });
     const downloadUrl = URL.createObjectURL(blob);
@@ -2536,7 +2784,7 @@ async function renderSettings(content) {
       });
       if (callError) {
         control.disabled = false;
-        return setNotice(content.querySelector("#delete-error"), `Leave the active call before deleting your account: ${callError.message}`);
+        return showErrorNotice(content.querySelector("#delete-error"), callError, "Leave the active call before deleting your account.");
       }
       await disconnectActiveCall();
     }
@@ -2549,12 +2797,14 @@ async function renderSettings(content) {
       });
     } catch (error) {
       control.disabled = false;
-      return setNotice(content.querySelector("#delete-error"), `Deletion request failed: ${error.message}`);
+      return showErrorNotice(content.querySelector("#delete-error"), error, "Deletion request failed.");
     }
     const result = await response.json();
     if (!response.ok) {
       control.disabled = false;
-      return setNotice(content.querySelector("#delete-error"), result.error || "Account deletion could not be completed.");
+      const error = new Error(result.error || "Account deletion could not be completed.");
+      error.status = response.status;
+      return showErrorNotice(content.querySelector("#delete-error"), error, "Account deletion failed.");
     }
     setNotice(content.querySelector("#delete-error"), "Your account and personal data have been deleted.", "success");
     await supabase.auth.signOut();
@@ -2586,12 +2836,16 @@ async function renderMarketplace(content) {
         body: JSON.stringify({ productId: control.dataset.buyProduct, idempotencyKey: crypto.randomUUID() }),
       });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Payment could not be started.");
+      if (!response.ok) {
+        const error = new Error(result.error || "Payment could not be started.");
+        error.status = response.status;
+        throw error;
+      }
       window.location.assign(result.authorizationUrl);
     } catch (error) {
       control.disabled = false;
       const notice = control.closest(".community-card").querySelector("[data-purchase-error]");
-      setNotice(notice, `Purchase unavailable: ${error.message}. Your account has not been charged.`);
+      showErrorNotice(notice, error, "Purchase unavailable. Your account has not been charged.");
     }
   }));
   content.querySelector("#order-history").innerHTML = orders.data.length ? orders.data.map((order) => `<article class="post-card"><div class="post-head"><strong>${escapeHtml(order.order_items?.[0]?.products?.name || "Digital order")}</strong><span class="status-tag">${escapeHtml(order.status)}</span></div><p>${escapeHtml(formatMoney(order.total_minor, order.currency_code))} · ${escapeHtml(datePart(order.created_at, { dateStyle: "medium" }))}</p></article>`).join("") : `<p class="muted-small">No purchases yet.</p>`;
@@ -2624,14 +2878,18 @@ async function handlePaymentReturn() {
       headers: { Authorization: `Bearer ${session.access_token}` },
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Payment status could not be verified.");
+    if (!response.ok) {
+      const error = new Error(result.error || "Payment status could not be verified.");
+      error.status = response.status;
+      throw error;
+    }
     if (result.status === "paid") {
       setNotice(notice, "Payment verified. Your purchase is now available in your account.", "success");
       return;
     }
     setNotice(notice, `Payment status: ${result.status}. Check your order history before trying again.`);
   } catch (error) {
-    setNotice(notice, `We couldn't verify the payment yet: ${error.message}. Check your order history before trying again.`);
+    showErrorNotice(notice, error, "We couldn't verify the payment yet. Check your order history before trying again.");
   }
 }
 
@@ -2648,7 +2906,7 @@ async function renderAdmin(content) {
     supabase.from("stream_reports").select("id, stream_id, reporter_id, reason, created_at, streams(title, game, provider)").eq("status", "open").order("created_at", { ascending: true }).limit(50),
   ]);
   const failure = reports.error || streams.error || prizes.error || streamReports.error;
-  if (failure) return setNotice(content.querySelector("#admin-error"), `Could not load moderation data: ${failure.message}`);
+  if (failure) return showErrorNotice(content.querySelector("#admin-error"), failure, "Could not load moderation data.");
   const reportList = content.querySelector("#admin-reports");
   reportList.innerHTML = reports.data.length ? reports.data.map((report) => `<article class="post-card"><div class="post-head"><strong>${escapeHtml(report.resource_type)} report</strong><time>${escapeHtml(datePart(report.created_at, { dateStyle: "medium", timeStyle: "short" }))}</time></div><p>${escapeHtml(report.reason)}</p><small>Reference: ${escapeHtml(report.resource_id)}</small><div class="card-actions"><button class="button secondary compact" data-review-report="${report.id}" data-status="reviewed">Mark reviewed</button><button class="button danger compact" data-review-report="${report.id}" data-status="actioned">Take action</button><button class="button secondary compact" data-review-report="${report.id}" data-status="dismissed">Dismiss</button></div></article>`).join("") : `<p class="muted-small">No open reports.</p>`;
   reportList.querySelectorAll("[data-review-report]").forEach((control) => control.addEventListener("click", async () => {
@@ -2660,7 +2918,7 @@ async function renderAdmin(content) {
     });
     if (error) {
       control.disabled = false;
-      return setNotice(content.querySelector("#admin-error"), error.message);
+      return showErrorNotice(content.querySelector("#admin-error"), error, "Could not update the report.");
     }
     await renderAdmin(content);
   }));
@@ -2674,7 +2932,7 @@ async function renderAdmin(content) {
     });
     if (error) {
       control.disabled = false;
-      return setNotice(content.querySelector("#admin-error"), error.message);
+      return showErrorNotice(content.querySelector("#admin-error"), error, "Could not update the stream report.");
     }
     await renderAdmin(content);
   }));
@@ -2685,7 +2943,7 @@ async function renderAdmin(content) {
     const { error } = await supabase.from("streams").update({ status: control.dataset.status }).eq("id", control.dataset.streamReview);
     if (error) {
       control.disabled = false;
-      return setNotice(content.querySelector("#admin-error"), error.message);
+      return showErrorNotice(content.querySelector("#admin-error"), error, "Could not update the stream.");
     }
     await renderAdmin(content);
   }));
@@ -2696,7 +2954,7 @@ async function renderAdmin(content) {
     const { error } = await supabase.from("tournaments").update({ prize_verified_at: new Date().toISOString() }).eq("id", control.dataset.verifyPrize);
     if (error) {
       control.disabled = false;
-      return setNotice(content.querySelector("#admin-error"), error.message);
+      return showErrorNotice(content.querySelector("#admin-error"), error, "Could not verify the prize.");
     }
     await renderAdmin(content);
   }));
@@ -2729,7 +2987,7 @@ async function renderAdmin(content) {
     submit.disabled = true;
     const { error } = await supabase.from("products").insert(payload);
     submit.disabled = false;
-    if (error) return setNotice(content.querySelector("#product-error"), error.message);
+    if (error) return showErrorNotice(content.querySelector("#product-error"), error, "Could not create the product.");
     setNotice(content.querySelector("#product-error"), "Product created.", "success");
     await loadAdminProducts(content.querySelector("#product-list"));
   });
@@ -2752,7 +3010,8 @@ async function loadAdminProducts(container) {
 }
 function renderDataError(container, error, retry) {
   console.error("GameHub data request failed:", error);
-  container.innerHTML = `<div class="empty-state error-state"><h2>We couldn’t load this right now</h2><p>${escapeHtml(error.message || "Check your connection and try again.")}</p><button class="button secondary" type="button" data-action="retry">Try again</button></div>`;
+  const presentation = describeError(error);
+  container.innerHTML = `<div class="empty-state error-state"><span class="error-category">${escapeHtml(presentation.category)}</span><h2>${escapeHtml(presentation.title)}</h2><p>${escapeHtml(presentation.message)}</p><button class="button secondary" type="button" data-action="retry">Try again</button></div>`;
   container.querySelector('[data-action="retry"]').addEventListener("click", retry);
 }
 
@@ -2786,6 +3045,17 @@ async function showAuthenticatedApp() {
       renderPublicRoute();
       return;
     }
+    const sharedReturn = sessionStorage.getItem("gamehub-share-return");
+    if (sharedReturn) {
+      sessionStorage.removeItem("gamehub-share-return");
+      window.history.replaceState({}, "", sharedReturn);
+      renderPublicRoute();
+      return;
+    }
+    if (sharedPathRoute()) {
+      renderPublicRoute();
+      return;
+    }
     const pathPage = publicPathPages[window.location.pathname.replace(/\/+$/, "") || "/"];
     if (pathPage && pathPage !== "home") {
       activePage = pathPage;
@@ -2800,7 +3070,8 @@ async function showAuthenticatedApp() {
     await handlePaymentReturn();
   } catch (error) {
     console.error("Could not load profile:", error);
-    app.innerHTML = `<main class="loading-screen"><div class="notice error">We couldn't load your profile. ${escapeHtml(error.message)}</div><button class="button secondary" data-action="retry-profile">Try again</button></main>`;
+    const presentation = describeError(error);
+    app.innerHTML = `<main class="loading-screen"><div class="notice error"><span class="error-category">${escapeHtml(presentation.category)}</span><p>${escapeHtml(presentation.message)}</p></div><button class="button secondary" data-action="retry-profile">Try again</button></main>`;
     app.querySelector('[data-action="retry-profile"]').addEventListener("click", showAuthenticatedApp);
   }
 }
@@ -2882,7 +3153,8 @@ if (!isSupabaseConfigured) {
   renderLoading();
   supabase.auth.getSession().then(({ data: { session }, error }) => {
     if (error) {
-      app.innerHTML = `<main class="loading-screen"><div class="notice error">Authentication could not be restored: ${escapeHtml(error.message)}</div><button class="button secondary" data-action="reload">Retry</button></main>`;
+      const presentation = describeError(error);
+      app.innerHTML = `<main class="loading-screen"><div class="notice error"><span class="error-category">${escapeHtml(presentation.category)}</span><p>${escapeHtml(presentation.message)}</p></div><button class="button secondary" data-action="reload">Retry</button></main>`;
       app.querySelector('[data-action="reload"]').addEventListener("click", () => window.location.reload());
       return;
     }

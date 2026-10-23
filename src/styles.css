@@ -195,6 +195,8 @@ input::placeholder, textarea::placeholder { color: #696c64; }
 .empty-state p { max-width: 440px; margin: 0 0 14px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .empty-state .button { margin-top: 8px; }
 .error-state { border-color: #714a45; }
+.error-category { display: inline-block; margin-bottom: 8px; color: #ffb2ac; font-size: 9px; font-weight: 700; letter-spacing: .12em; }
+.error-state h2 { margin-top: 0; }
 .skeleton-card { height: 150px; border: 1px solid var(--border); border-radius: 9px; background: linear-gradient(100deg, #171815 20%, #1e1f1b 40%, #171815 60%); background-size: 200% 100%; animation: shimmer 1.4s ease-in-out infinite; }
 @keyframes shimmer { to { background-position-x: -200%; } }
 
@@ -258,6 +260,23 @@ input::placeholder, textarea::placeholder { color: #696c64; }
 .public-footer-grid a { line-height: 1.5; }
 .public-footer nav { flex-wrap: wrap; }
 .public-article { max-width: 820px; padding-top: 66px; }
+.share-detail-card { padding: clamp(20px, 5vw, 38px); border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.share-detail-card > h1 { margin: 0 0 12px; font-size: clamp(28px, 6vw, 44px); line-height: 1.1; overflow-wrap: anywhere; }
+.share-detail-card > .muted { line-height: 1.7; }
+.share-profile-card { display: grid; justify-items: center; padding: clamp(20px, 5vw, 38px); border: 1px solid var(--border); border-radius: 12px; background: var(--surface); text-align: center; }
+.share-profile-card > h1 { margin: 0 0 5px; font-size: clamp(28px, 6vw, 44px); overflow-wrap: anywhere; }
+.share-profile-card .profile-avatar { width: 88px; height: 88px; margin: 0 0 20px; }
+.share-profile-card .player-handle { margin: 0; }
+.share-profile-card .card-actions { margin-top: 18px; }
+.share-profile-card .share-actions { justify-content: center; }
+.share-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+.share-actions .share-feedback { flex: 1 0 100%; margin: 2px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.share-link-fallback { flex: 1 1 100%; min-width: 0; }
+.tournament-details { display: grid; gap: 1px; margin: 24px 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.tournament-details > div { display: grid; grid-template-columns: minmax(125px, .4fr) minmax(0, 1fr); gap: 12px; padding: 12px; background: #141512; }
+.tournament-details dt { color: var(--muted); font-size: 11px; }
+.tournament-details dd { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.share-detail-card > .share-actions { padding-top: 12px; border-top: 1px solid var(--border); }
 .public-article .back-link { display: inline-block; margin-bottom: 45px; }
 .public-article h1 { margin: 0 0 16px; font-size: clamp(36px, 6vw, 58px); letter-spacing: -.065em; }
 .public-article > p:not(.eyebrow):not(.draft-label) { color: #c1c4ba; font-size: 14px; line-height: 1.85; }
