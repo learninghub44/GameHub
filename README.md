@@ -82,6 +82,7 @@ The simplest supported workflow is the dedicated remote development Supabase pro
 - Build command: `npm run build`
 - Build output directory: `dist`
 - Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` as Pages build variables.
+- These `VITE_*` values are compiled into the browser bundle at build time. Add them in the Pages project's build environment variables for Production (and Preview if needed), then create a fresh deployment; changing Functions runtime secrets or adding variables after a deployment does not update an already-built frontend.
 - Configure these server-side Pages Function secrets/variables for each environment:
   - `SUPABASE_URL`
   - `SUPABASE_ANON_KEY`
