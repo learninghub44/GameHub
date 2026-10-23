@@ -6,12 +6,12 @@ GameHub Africa is a mobile-first gaming community application built with vanilla
 
 - Public landing, player/game/community/live/tournament/marketplace discovery, and About, Terms, Privacy and Community Guidelines pages.
 - Supabase email/password authentication, Google OAuth entry, password recovery and onboarding with unique usernames.
-- Editable profiles, avatars, privacy settings, gamer preferences, player discovery, follows, friend requests, blocks and reports.
+- Editable profiles, avatars, profile banners, free avatar accents and verified-purchase profile frames, privacy settings, gamer preferences, player discovery, follows, friend requests, blocks and reports.
 - Community creation, membership, posts and comments; teams, captain invitations and team-based tournament registration.
 - Stream submissions, game filtering/search, creator follows, moderator review, YouTube/Twitch embeds, GameHub live chat and moderation.
 - LiveKit-backed private one-to-one voice/video calls, group voice calls, public voice rooms, incoming-call states and user call privacy. Call media uses WebRTC; the app never sends media through chat or Supabase Realtime.
 - Tournament creation, individual/team registration, organizer brackets, results and audit history.
-- Marketplace catalog and order history; new marketplace checkout is disabled and displays “coming soon”. Previously started payments can still be verified and settled.
+- Marketplace catalog, cosmetic ownership, purchase attempts, and order history. Checkout is explicitly disabled per deployment until enabled by the operator; failed attempts report the actual deployment status and do not imply a charge. Previously started payments can still be verified and settled. Paid frames can only be equipped after server-side verified payment; refunded frames are cleared if no active matching entitlement remains.
 - Moderator tools for reports, stream review, prize claims and marketplace product management; personal-data export and account-deletion request/execution.
 - Public About, Safety, Community Guidelines, searchable FAQ/help, Contact, Terms, Privacy, Cookies and Refund draft pages; authenticated support tickets, privacy requests and moderation appeals.
 - Support-agent queues with requester/staff message separation, internal ticket notes, audited status/reply workflows, policy version publishing and help-content management.
@@ -21,7 +21,7 @@ GameHub Africa is a mobile-first gaming community application built with vanilla
 
 Supabase PostgreSQL SQL migrations are the schema and migration source of truth. The schema uses Supabase Auth identities, RLS, Storage policies, Realtime publication and PostgreSQL security-definer functions/triggers; introducing Prisma migrations would create a second writer for that schema and risk desynchronizing those Supabase-specific features. The Cloudflare Pages Functions also use the Supabase REST/Auth APIs and do not maintain a long-lived PostgreSQL connection, so a Prisma client/adapter would add complexity without improving this runtime.
 
-Apply `supabase/migrations/202610220001_initial_schema.sql`, then `202610220002_workflows.sql`, `202610220003_public_discovery.sql`, `202610220004_voice_calls.sql` and `202610220005_support_center.sql` to a development database in that order. Review each migration before applying it to production. The SQL files are the version-controlled migration history; there are no Prisma migrations and no automatic production schema changes.
+Apply `supabase/migrations/202610220001_initial_schema.sql`, then `202610220002_workflows.sql`, `202610220003_public_discovery.sql`, `202610220004_voice_calls.sql`, `202610220005_support_center.sql` and `202610220006_profile_cosmetics.sql` to a development database in that order. Review each migration before applying it to production. The SQL files are the version-controlled migration history; there are no Prisma migrations and no automatic production schema changes.
 
 ## Local development
 
@@ -93,11 +93,11 @@ The simplest supported workflow is the dedicated remote development Supabase pro
   - `LIVEKIT_API_KEY`
   - `LIVEKIT_API_SECRET` (secret)
 - Set `VITE_LIVEKIT_URL` as a Pages build variable to the matching LiveKit secure WebSocket URL. Keep the API key/secret out of `VITE_*` variables.
-- Set the Cloudflare Pages server-side variable `MARKETPLACE_PURCHASES_ENABLED` to `false` (or leave it unset). This disables only new marketplace checkout; it does not turn off unrelated services or existing payment verification/webhooks.
+- Set the Cloudflare Pages server-side variable `MARKETPLACE_PURCHASES_ENABLED` to `false` (or leave it unset). This disables only new marketplace checkout; it does not turn off unrelated services or existing payment verification/webhooks. The marketplace UI remains available and reports checkout status on an attempted purchase.
 - Configure Paystack's webhook URL as `https://<your-domain>/api/payments/webhook`.
 - Configure Supabase Auth redirect origins and apply all five reviewed migrations before publishing the frontend.
 
-Never expose `SUPABASE_SERVICE_ROLE_KEY`, `PAYSTACK_SECRET_KEY`, or `LIVEKIT_API_SECRET` to browser code or commit them. Marketplace checkout is disabled unless the server-side `MARKETPLACE_PURCHASES_ENABLED` value is exactly `true`. Keep it unset or `false` until marketplace terms/refunds and the production payment configuration are approved. Payment verification and webhook handling remain active for previously initialized transactions; this gate only blocks creation of new marketplace checkout sessions.
+Never expose `SUPABASE_SERVICE_ROLE_KEY`, `PAYSTACK_SECRET_KEY`, or `LIVEKIT_API_SECRET` to browser code or commit them. Marketplace checkout is disabled unless the server-side `MARKETPLACE_PURCHASES_ENABLED` value is exactly `true`. Keep it unset or `false` until marketplace terms/refunds and production payment configuration are ready. Payment verification and webhook handling remain active for previously initialized transactions; this gate only blocks creation of new marketplace checkout sessions.
 
 ## Operational setup and limitations
 

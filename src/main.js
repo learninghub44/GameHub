@@ -19,6 +19,21 @@ let activeCallNames = new Map();
 let globalCallAlertsChannel = null;
 const liveKitServerUrl = import.meta.env.VITE_LIVEKIT_URL || "";
 const missedCallTimers = new Map();
+const profileCosmetics = [
+  { key: "classic", label: "Classic · free" },
+  { key: "accent-cyan", label: "Cyan accent · free" },
+  { key: "accent-violet", label: "Violet accent · free" },
+  { key: "accent-amber", label: "Amber accent · free" },
+  { key: "frame-ember", label: "Ember frame" },
+  { key: "frame-gold", label: "Gold frame" },
+  { key: "frame-neon", label: "Neon frame" },
+];
+const paidProfileCosmeticKeys = new Set(["frame-ember", "frame-gold", "frame-neon"]);
+
+function profileCosmeticClass(key) {
+  const cosmetic = profileCosmetics.find((item) => item.key === key);
+  return `profile-style-${cosmetic?.key || "classic"}`;
+}
 
 const icons = {
   home: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></svg>',
@@ -83,7 +98,8 @@ function renderAuth() {
           <div class="divider"><span>or continue with email</span></div>
           <form id="auth-form">
             <label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required />
-            <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" minlength="8" placeholder="At least 8 characters" required />
+            <label for="password">Password</label><div class="password-control"><input id="password" name="password" type="password" autocomplete="current-password" minlength="8" placeholder="At least 8 characters" required /><button class="text-button" type="button" data-action="toggle-password" aria-controls="password" aria-pressed="false">Show</button></div>
+            <div id="password-confirmation" hidden><label for="confirm-password">Confirm password</label><div class="password-control"><input id="confirm-password" name="confirm_password" type="password" autocomplete="new-password" minlength="8" placeholder="Enter your password again" /><button class="text-button" type="button" data-action="toggle-password" aria-controls="confirm-password" aria-pressed="false">Show</button></div></div>
             <button class="button primary full" id="auth-submit" type="submit">Continue with email</button>
           </form>
           <div class="auth-links"><button class="text-button" type="button" data-action="toggle-auth">New here? Create account</button><button class="text-button" type="button" data-action="reset-password">Forgot password?</button></div>
@@ -104,8 +120,14 @@ function bindAuthForm() {
     const form = new FormData(event.currentTarget);
     const email = String(form.get("email")).trim();
     const password = String(form.get("password"));
+    const confirmation = String(form.get("confirm_password") || "");
     const submit = document.querySelector("#auth-submit");
     const notice = document.querySelector("#auth-notice");
+    if (isSignUp && password !== confirmation) {
+      setNotice(notice, "The passwords do not match.");
+      document.querySelector("#confirm-password").focus();
+      return;
+    }
     submit.disabled = true;
     submit.textContent = isSignUp ? "Creating account…" : "Signing in…";
     setNotice(notice, "");
@@ -427,6 +449,8 @@ function renderPublicRoute() {
       document.querySelector("#auth-submit").textContent = "Create account";
       document.querySelector('[data-action="toggle-auth"]').textContent = "Already a member? Sign in";
       document.querySelector("#password").autocomplete = "new-password";
+      document.querySelector("#password-confirmation").hidden = false;
+      document.querySelector("#confirm-password").required = true;
     }
     return;
   }
@@ -476,7 +500,10 @@ function renderSetupScreen() {
 }
 
 function renderPublicShell(content, current = "") {
-  app.innerHTML = `<div class="public-shell"><header class="public-header"><a class="brand" href="/"><span class="brand-mark">G<span>.</span></span><span>GAMEHUB<span class="brand-region">AFRICA</span></span></a><nav class="public-nav" aria-label="Explore GameHub">${publicNavigation.map(([key, label]) => `<a href="#${key}" ${current === key ? 'aria-current="page"' : ""}>${label}</a>`).join("")}</nav><div class="public-auth">${currentUser ? `<a class="button secondary compact" href="#home">Open GameHub</a>${currentProfile?.platform_role === "admin" ? `<a class="text-button" href="/admin/support">Staff workspace</a>` : ""}` : `<a class="text-button" href="#sign-in">Sign in</a><a class="button primary compact" href="#register">Join free</a>`}</div></header>${content}<footer class="public-footer"><div class="public-footer-grid"><section><strong>About</strong><a href="/about">About GameHub</a><a href="/about#how-it-works">How it works</a><a href="/community-guidelines">Community Guidelines</a><a href="/safety">Safety Center</a></section><section><strong>Explore</strong><a href="#discover">Discover gamers</a><a href="#communities">Communities</a><a href="#teams">Teams</a><a href="#live">Livestreams</a><a href="#tournaments">Tournaments</a></section><section><strong>Help</strong><a href="/support">Help Center</a><a href="/faq">FAQs</a><a href="/contact">Contact Us</a><a href="/report">Report a problem</a><a href="/appeals">Appeal a decision</a></section><section><strong>Legal</strong><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/cookies">Cookie Policy</a><a href="/refunds">Refund Policy</a></section><section><strong>Account</strong>${currentUser ? `<a href="/settings/privacy">Privacy settings</a><a href="#settings">Account settings</a>` : `<a href="#sign-in">Sign in</a><a href="#register">Create account</a><a href="/settings/privacy">Privacy settings</a>`}</section></div><span>GameHub Africa · Made for players</span></footer></div>`;
+  app.innerHTML = `<div class="public-shell"><header class="public-header"><a class="brand" href="/"><span class="brand-mark">G<span>.</span></span><span>GAMEHUB<span class="brand-region">AFRICA</span></span></a><details class="public-more"><summary>More</summary><nav aria-label="More GameHub destinations"><p class="mobile-menu-heading">Explore GameHub</p>${publicNavigation.map(([key, label]) => `<a href="#${key}" ${current === key ? 'aria-current="page"' : ""}>${label}</a>`).join("")}</nav></details><nav class="public-nav" aria-label="Explore GameHub">${publicNavigation.map(([key, label]) => `<a href="#${key}" ${current === key ? 'aria-current="page"' : ""}>${label}</a>`).join("")}</nav><div class="public-auth">${currentUser ? `<a class="button secondary compact" href="#home">Open GameHub</a>${currentProfile?.platform_role === "admin" ? `<a class="text-button" href="/admin/support">Staff workspace</a>` : ""}` : `<a class="text-button" href="#sign-in">Sign in</a><a class="button primary compact" href="#register">Join free</a>`}</div></header>${content}<footer class="public-footer"><div class="public-footer-grid"><section><strong>About</strong><a href="/about">About GameHub</a><a href="/about#how-it-works">How it works</a><a href="/community-guidelines">Community Guidelines</a><a href="/safety">Safety Center</a></section><section><strong>Explore</strong><a href="#discover">Discover gamers</a><a href="#communities">Communities</a><a href="#teams">Teams</a><a href="#live">Livestreams</a><a href="#tournaments">Tournaments</a></section><section><strong>Help</strong><a href="/support">Help Center</a><a href="/faq">FAQs</a><a href="/contact">Contact Us</a><a href="/report">Report a problem</a><a href="/appeals">Appeal a decision</a></section><section><strong>Legal</strong><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/cookies">Cookie Policy</a><a href="/refunds">Refund Policy</a></section><section><strong>Account</strong>${currentUser ? `<a href="/settings/privacy">Privacy settings</a><a href="#settings">Account settings</a>` : `<a href="#sign-in">Sign in</a><a href="#register">Create account</a><a href="/settings/privacy">Privacy settings</a>`}</section></div><span>GameHub Africa · Made for players</span></footer></div>`;
+  app.querySelectorAll(".public-more nav a").forEach((link) => link.addEventListener("click", () => {
+    app.querySelector(".public-more")?.removeAttribute("open");
+  }));
 }
 
 function renderPublicNotFound() {
@@ -964,13 +991,13 @@ function renderPublicListing(page) {
     teams: ["SQUAD UP", "Build your team.", "Team membership and invitations are available to signed-in players."],
     live: ["LIVE DIRECTORY", "Watch together.", "Open live streams shared by GameHub creators."],
     tournaments: ["COMPETE", "Play for the win.", "Browse published tournaments and their real registration details."],
-    marketplace: ["OPTIONAL EXTRAS", "Marketplace.", "Browse optional digital items. Marketplace purchases are coming soon."],
+    marketplace: ["OPTIONAL EXTRAS", "Marketplace.", "Browse optional digital items. Community features remain free."],
   })[page];
   const containerId = "public-listing-results";
   renderPublicShell(`<main class="public-main public-directory">${pageHeader(...heading)}<div id="${containerId}" class="public-results"><div class="skeleton-card"></div><div class="skeleton-card"></div></div><p class="muted-small">Showing published information only. Join GameHub to participate.</p></main>`, page);
   if (!isSupabaseConfigured) {
     app.querySelector(`#${containerId}`).innerHTML = page === "marketplace"
-      ? `<div class="empty-state"><h2>Marketplace purchases are coming soon</h2><p>Community features remain free. Optional marketplace items will appear here when the catalog is ready.</p></div>`
+      ? `<div class="empty-state"><h2>Marketplace catalog unavailable</h2><p>Connect the GameHub database to browse optional digital items. Community features remain free.</p></div>`
       : `<div class="empty-state"><h2>Connect a Supabase project to browse live listings</h2><p>Public profiles, communities, streams and tournaments appear here after the setup instructions and database migrations are complete.</p><a class="button secondary" href="#about">Learn about GameHub</a></div>`;
     return;
   }
@@ -992,12 +1019,12 @@ function renderPublicEmpty(container, title, description) {
 }
 
 async function loadPublicPlayers(container) {
-  const { data, error } = await supabase.from("profiles").select("id, username, display_name, bio, country_code, avatar_path").order("username").limit(30);
+  const { data, error } = await supabase.from("profiles").select("id, username, display_name, bio, country_code, avatar_path, profile_cosmetic_key").order("username").limit(30);
   if (error) return renderDataError(container, error, () => loadPublicPlayers(container));
   if (!data.length) return renderPublicEmpty(container, "No public profiles yet", "As players join and publish their profiles, they will appear here.");
   container.innerHTML = `<div class="player-grid">${data.map((profile) => {
     const avatar = profile.avatar_path ? supabase.storage.from("gamehub-avatars").getPublicUrl(profile.avatar_path).data.publicUrl : "";
-    return `<article class="player-card"><span class="avatar">${avatar ? `<img src="${escapeHtml(avatar)}" alt="" loading="lazy" />` : escapeHtml(initials(profile.display_name))}</span><div class="player-card-copy"><h2>${escapeHtml(profile.display_name)}</h2><p class="player-handle">@${escapeHtml(profile.username)}</p><p class="player-bio">${escapeHtml(profile.bio || "Ready to meet fellow gamers.")}</p><small>${escapeHtml(countryName(profile.country_code))}</small><a class="button secondary compact" href="#register">Connect</a></div></article>`;
+    return `<article class="player-card"><span class="avatar ${profileCosmeticClass(profile.profile_cosmetic_key)}">${avatar ? `<img src="${escapeHtml(avatar)}" alt="" loading="lazy" />` : escapeHtml(initials(profile.display_name))}</span><div class="player-card-copy"><h2>${escapeHtml(profile.display_name)}</h2><p class="player-handle">@${escapeHtml(profile.username)}</p><p class="player-bio">${escapeHtml(profile.bio || "Ready to meet fellow gamers.")}</p><small>${escapeHtml(countryName(profile.country_code))}</small><a class="button secondary compact" href="#register">Connect</a></div></article>`;
   }).join("")}</div>`;
 }
 
@@ -1030,7 +1057,7 @@ async function loadPublicProducts(container) {
   const { data, error } = await supabase.from("products").select("id, name, description, product_type, price_minor, currency_code, credit_amount").eq("active", true).order("created_at", { ascending: false }).limit(30);
   if (error) return renderDataError(container, error, () => loadPublicProducts(container));
   if (!data.length) return renderPublicEmpty(container, "No marketplace items yet", "Optional items will appear here when the marketplace is configured.");
-  container.innerHTML = `<p class="draft-label">Marketplace purchases are coming soon. No payment will be collected.</p><div class="community-grid">${data.map((product) => `<article class="community-card"><small>${escapeHtml(product.product_type.replaceAll("_", " "))}</small><h2>${escapeHtml(product.name)}</h2><p>${escapeHtml(product.description || "Digital item")}</p>${product.credit_amount ? `<p>${product.credit_amount} GH credits</p>` : ""}<strong>${escapeHtml(formatMoney(product.price_minor, product.currency_code))}</strong><button class="button secondary compact" type="button" disabled aria-disabled="true">Coming soon</button></article>`).join("")}</div>`;
+  container.innerHTML = `<div class="community-grid">${data.map((product) => `<article class="community-card"><small>${escapeHtml(product.product_type.replaceAll("_", " "))}</small><h2>${escapeHtml(product.name)}</h2><p>${escapeHtml(product.description || "Digital item")}</p>${product.credit_amount ? `<p>${product.credit_amount} GH credits</p>` : ""}<strong>${escapeHtml(formatMoney(product.price_minor, product.currency_code))}</strong><a class="button secondary compact" href="${currentUser ? "#marketplace" : "#register"}">${currentUser ? "Open marketplace" : "Sign in to buy"}</a></article>`).join("")}</div>`;
 }
 
 async function loadPublicGames(container) {
@@ -1060,19 +1087,18 @@ function renderApp() {
         <div class="sidebar-bottom"><div class="mini-profile"><span class="avatar">${escapeHtml(initials(currentProfile.display_name))}</span><div><strong>${escapeHtml(currentProfile.display_name)}</strong><small>@${escapeHtml(currentProfile.username)}</small></div></div><button class="nav-link signout" data-action="signout">${icons.profile}<span>Sign out</span></button></div>
       </aside>
       <main class="main-area">
-        <header class="topbar"><div class="mobile-brand"><span class="brand-mark">G<span>.</span></span><span>GAMEHUB</span></div><details class="mobile-more"><summary>More</summary><nav aria-label="More destinations">${navigation.filter(([key]) => ["calls", "communities", "teams", "tournaments", "marketplace", "notifications", "settings"].includes(key)).map(([key, label]) => `<a href="#${key}" data-page="${key}">${icons[key]}${label}</a>`).join("")}${["admin", "moderator"].includes(currentProfile.platform_role) ? `<a href="#admin" data-page="admin">${icons.settings}Moderation</a>` : ""}</nav></details><div class="topbar-right"><button class="nav-link top-notifications" data-page="notifications" aria-label="Notifications">${icons.notifications}<span>Notifications</span></button><span class="status-pill"><span class="live-dot"></span> COMMUNITY</span><button class="avatar avatar-button" data-page="profile" aria-label="Open your profile">${escapeHtml(initials(currentProfile.display_name))}</button></div></header>
+        <header class="topbar"><div class="mobile-brand"><span class="brand-mark">G<span>.</span></span><span>GAMEHUB</span></div><details class="mobile-more"><summary>More</summary><nav aria-label="More GameHub destinations"><p class="mobile-menu-heading">More in GameHub</p>${navigation.filter(([key]) => !["home", "discover", "live", "calls", "messages", "profile"].includes(key)).map(([key, label]) => `<a href="#${key}" data-page="${key}" ${activePage === key ? 'aria-current="page"' : ""}>${icons[key]}${label}</a>`).join("")}${["admin", "moderator"].includes(currentProfile.platform_role) ? `<a href="#admin" data-page="admin" ${activePage === "admin" ? 'aria-current="page"' : ""}>${icons.settings}Moderation</a>` : ""}<a href="/support">${icons.notifications}Help center</a><a href="/settings/privacy">${icons.settings}Privacy settings</a><button type="button" data-action="signout">${icons.profile}Sign out</button></nav></details><div class="topbar-right"><button class="nav-link top-notifications" data-page="notifications" aria-label="Notifications">${icons.notifications}<span>Notifications</span></button><span class="status-pill"><span class="live-dot"></span> COMMUNITY</span><button class="avatar avatar-button" data-page="profile" aria-label="Open your profile">${escapeHtml(initials(currentProfile.display_name))}</button></div></header>
         <div id="global-call-alert-host"></div>
         <section class="page-content" id="page-content"></section>
         <nav class="mobile-nav" aria-label="Mobile navigation">${navItems(true)}</nav>
       </main>
       <div id="global-call-stage-host"></div>
     </div>`;
-  document.querySelectorAll("[data-page]").forEach((element) => element.addEventListener("click", (event) => {
-    event.preventDefault();
-    activePage = element.dataset.page;
-    renderPage();
-  }));
-  document.querySelector('[data-action="signout"]').addEventListener("click", signOut);
+    document.querySelectorAll("[data-page]").forEach((element) => element.addEventListener("click", (event) => {
+      event.preventDefault();
+      navigateToAppPage(element.dataset.page);
+    }));
+  document.querySelectorAll('[data-action="signout"]').forEach((control) => control.addEventListener("click", signOut));
   setupGlobalCallAlerts();
   renderPage();
 }
@@ -1090,8 +1116,7 @@ function showIncomingCallAlert(callId) {
   host.dataset.callId = callId;
   host.innerHTML = `<section class="call-alert" role="alert"><div><strong>Incoming call</strong><p>Open Calls to answer or decline.</p></div><div class="card-actions"><button class="button primary compact" data-open-calls>Open Calls</button><button class="button secondary compact" data-dismiss-call-alert>Dismiss</button></div></section>`;
   host.querySelector("[data-open-calls]").addEventListener("click", () => {
-    activePage = "calls";
-    renderPage();
+    navigateToAppPage("calls");
     host.innerHTML = "";
   });
   host.querySelector("[data-dismiss-call-alert]").addEventListener("click", () => { host.innerHTML = ""; });
@@ -1170,6 +1195,16 @@ const navigation = [
   ["messages", "Messages"], ["notifications", "Notifications"], ["profile", "My profile"], ["settings", "Settings"],
 ];
 
+function navigateToAppPage(page) {
+  if (!navigation.some(([key]) => key === page) && page !== "admin") return;
+  if (window.location.hash !== `#${page}`) {
+    window.history.pushState({ gamehubPage: page }, "", `#${page}`);
+  }
+  activePage = page;
+  document.querySelector(".mobile-more")?.removeAttribute("open");
+  renderPage();
+}
+
 function navItems(mobile = false) {
   const items = mobile ? navigation.filter(([key]) => ["home", "discover", "live", "calls", "messages", "profile"].includes(key)) : [
     ...navigation,
@@ -1211,20 +1246,49 @@ function renderPage() {
 async function renderHome(content) {
   content.innerHTML = `${pageHeader("YOUR SPACE", `Good to have you, ${escapeHtml(currentProfile.display_name)}.`, "Your gaming community starts here.")}<div class="welcome-banner"><div><p class="eyebrow">GAMEHUB AFRICA</p><h2>Find your next<br />good game.</h2><p>Discover gamers, communities and live streams shared by players.</p><button class="button primary" data-page="discover">Explore the hub ${icons.arrow}</button></div><div class="banner-art" aria-hidden="true"><span class="art-ring ring-one"></span><span class="art-ring ring-two"></span><span class="art-cross">✳</span><span class="art-square"></span></div></div><div class="section-heading"><div><p class="eyebrow">GET STARTED</p><h2>Make yourself at home</h2></div></div><div class="quick-grid"><button class="quick-card" data-page="discover"><span class="quick-icon">${icons.discover}</span><strong>Meet gamers</strong><span>Find players and build your circle.</span><span class="quick-arrow">${icons.arrow}</span></button><button class="quick-card" data-page="communities"><span class="quick-icon">${icons.communities}</span><strong>Find your community</strong><span>Explore groups around the games you love.</span><span class="quick-arrow">${icons.arrow}</span></button><button class="quick-card" data-page="live"><span class="quick-icon">${icons.live}</span><strong>Watch live</strong><span>Discover streams shared by creators.</span><span class="quick-arrow">${icons.arrow}</span></button></div><div id="home-error" class="notice" hidden></div>`;
   content.querySelectorAll("[data-page]").forEach((link) => link.addEventListener("click", () => {
-    activePage = link.dataset.page;
-    renderPage();
+    navigateToAppPage(link.dataset.page);
   }));
 }
 
 function renderProfile(content) {
   const avatarUrl = currentProfile.avatar_path ? supabase.storage.from("gamehub-avatars").getPublicUrl(currentProfile.avatar_path).data.publicUrl : "";
-  content.innerHTML = `${pageHeader("PLAYER PROFILE", "Your profile", "The identity other players see on GameHub.")}<div class="profile-card"><div class="profile-cover"></div><div class="profile-details"><span class="avatar profile-avatar">${avatarUrl ? `<img src="${escapeHtml(avatarUrl)}" alt="" />` : escapeHtml(initials(currentProfile.display_name))}</span><div class="profile-name"><h2>${escapeHtml(currentProfile.display_name)}</h2><span>@${escapeHtml(currentProfile.username)}</span></div><p class="profile-bio">${escapeHtml(currentProfile.bio || "Add a bio to tell other players a little about you.")}</p><div class="profile-meta"><span>${escapeHtml(countryName(currentProfile.country_code))}</span><span>${currentProfile.preferred_language === "sw" ? "Kiswahili" : "English"}</span><span>${currentProfile.profile_visibility === "private" ? "Private profile" : "Public profile"}</span></div><button class="button secondary" data-action="edit-profile">Edit profile</button></div></div><div id="profile-editor"></div><div class="section-heading"><div><p class="eyebrow">YOUR GAMING SETUP</p><h2>Favourite games</h2></div></div><div id="profile-games" class="tag-row"></div>`;
+  const bannerUrl = currentProfile.banner_path ? supabase.storage.from("gamehub-avatars").getPublicUrl(currentProfile.banner_path).data.publicUrl : "";
+  content.innerHTML = `${pageHeader("PLAYER PROFILE", "Your profile", "The identity other players see on GameHub.")}<div class="profile-card"><div class="profile-cover">${bannerUrl ? `<img class="profile-cover-image" src="${escapeHtml(bannerUrl)}" alt="" />` : ""}</div><div class="profile-details"><span class="avatar profile-avatar ${profileCosmeticClass(currentProfile.profile_cosmetic_key)}">${avatarUrl ? `<img src="${escapeHtml(avatarUrl)}" alt="" />` : escapeHtml(initials(currentProfile.display_name))}</span><div class="profile-name"><h2>${escapeHtml(currentProfile.display_name)}</h2><span>@${escapeHtml(currentProfile.username)}</span></div><p class="profile-bio">${escapeHtml(currentProfile.bio || "Add a bio to tell other players a little about you.")}</p><div class="profile-meta"><span>${escapeHtml(countryName(currentProfile.country_code))}</span><span>${currentProfile.preferred_language === "sw" ? "Kiswahili" : "English"}</span><span>${currentProfile.profile_visibility === "private" ? "Private profile" : "Public profile"}</span></div><button class="button secondary" data-action="edit-profile">Edit profile</button></div></div><div id="profile-style-settings"></div><div id="profile-editor"></div><div class="section-heading"><div><p class="eyebrow">YOUR GAMING SETUP</p><h2>Favourite games</h2></div></div><div id="profile-games" class="tag-row"></div>`;
   content.querySelector('[data-action="edit-profile"]').addEventListener("click", () => renderProfileEditor(content.querySelector("#profile-editor")));
+  renderProfileStyleSettings(content.querySelector("#profile-style-settings"));
   loadUserGames(content.querySelector("#profile-games"), currentUser.id);
 }
 
+async function renderProfileStyleSettings(container) {
+  container.innerHTML = `<section class="profile-style-settings"><div><p class="eyebrow">MAKE IT YOURS</p><h2>Profile style</h2><p class="muted-small">Choose a free accent or equip a frame unlocked from a verified purchase.</p></div><div id="profile-style-error" class="notice" role="alert" hidden></div><div class="profile-style-controls"><label for="profile-style-select">Avatar style</label><select id="profile-style-select" aria-label="Avatar style"></select><button class="button secondary compact" id="apply-profile-style" type="button">Apply style</button></div></section>`;
+  const notice = container.querySelector("#profile-style-error");
+  const select = container.querySelector("#profile-style-select");
+  const { data, error } = await supabase.from("entitlements").select("entitlement_key").eq("user_id", currentUser.id).is("revoked_at", null);
+  if (error) return renderDataError(notice, error, () => renderProfileStyleSettings(container));
+  const ownedKeys = new Set((data || []).map((row) => row.entitlement_key));
+  const options = profileCosmetics.filter((cosmetic) => !paidProfileCosmeticKeys.has(cosmetic.key) || ownedKeys.has(cosmetic.key));
+  select.innerHTML = options.map((cosmetic) => `<option value="${cosmetic.key}">${escapeHtml(cosmetic.label)}</option>`).join("");
+  select.value = options.some((cosmetic) => cosmetic.key === currentProfile.profile_cosmetic_key)
+    ? currentProfile.profile_cosmetic_key
+    : "classic";
+  container.querySelector("#apply-profile-style").addEventListener("click", async (event) => {
+    const control = event.currentTarget;
+    control.disabled = true;
+    const { error: equipError } = await supabase.rpc("equip_profile_cosmetic", {
+      requested_cosmetic_key: select.value,
+    });
+    if (equipError) {
+      control.disabled = false;
+      return setNotice(notice, `We couldn't apply that style: ${equipError.message}`);
+    }
+    await loadProfile();
+    renderPage();
+    announce("Profile style updated");
+  });
+}
+
 function renderProfileEditor(container) {
-  container.innerHTML = `<form id="profile-edit-form" class="edit-card"><h2>Edit your profile</h2><div id="profile-error" class="notice" role="alert" hidden></div><label for="edit-display-name">Display name</label><input id="edit-display-name" name="display_name" maxlength="60" value="${escapeHtml(currentProfile.display_name)}" required /><label for="edit-bio">Bio</label><textarea id="edit-bio" name="bio" maxlength="240" rows="4" placeholder="A little about you…">${escapeHtml(currentProfile.bio || "")}</textarea><label for="edit-country">Country</label><select id="edit-country" name="country_code"><option value="KE" ${currentProfile.country_code === "KE" ? "selected" : ""}>Kenya</option><option value="UG" ${currentProfile.country_code === "UG" ? "selected" : ""}>Uganda</option><option value="TZ" ${currentProfile.country_code === "TZ" ? "selected" : ""}>Tanzania</option><option value="NG" ${currentProfile.country_code === "NG" ? "selected" : ""}>Nigeria</option><option value="ZA" ${currentProfile.country_code === "ZA" ? "selected" : ""}>South Africa</option><option value="OTHER" ${currentProfile.country_code === "OTHER" ? "selected" : ""}>Other</option></select><label for="edit-avatar">Avatar (PNG, JPEG or WebP; up to 5 MB)</label><input id="edit-avatar" type="file" accept="image/png,image/jpeg,image/webp" /><label for="edit-visibility">Profile visibility</label><select id="edit-visibility"><option value="public" ${currentProfile.profile_visibility !== "private" ? "selected" : ""}>Public</option><option value="private" ${currentProfile.profile_visibility === "private" ? "selected" : ""}>Private</option></select><div class="form-actions"><button class="button primary" type="submit">Save changes</button><button class="button secondary" type="button" data-action="cancel-edit">Cancel</button></div></form>`;
+  container.innerHTML = `<form id="profile-edit-form" class="edit-card"><h2>Edit your profile</h2><div id="profile-error" class="notice" role="alert" hidden></div><label for="edit-display-name">Display name</label><input id="edit-display-name" name="display_name" maxlength="60" value="${escapeHtml(currentProfile.display_name)}" required /><label for="edit-bio">Bio</label><textarea id="edit-bio" name="bio" maxlength="240" rows="4" placeholder="A little about you…">${escapeHtml(currentProfile.bio || "")}</textarea><label for="edit-country">Country</label><select id="edit-country" name="country_code"><option value="KE" ${currentProfile.country_code === "KE" ? "selected" : ""}>Kenya</option><option value="UG" ${currentProfile.country_code === "UG" ? "selected" : ""}>Uganda</option><option value="TZ" ${currentProfile.country_code === "TZ" ? "selected" : ""}>Tanzania</option><option value="NG" ${currentProfile.country_code === "NG" ? "selected" : ""}>Nigeria</option><option value="ZA" ${currentProfile.country_code === "ZA" ? "selected" : ""}>South Africa</option><option value="OTHER" ${currentProfile.country_code === "OTHER" ? "selected" : ""}>Other</option></select><label for="edit-avatar">Avatar (PNG, JPEG or WebP; up to 5 MB)</label><input id="edit-avatar" type="file" accept="image/png,image/jpeg,image/webp" /><label for="edit-banner">Profile banner (PNG, JPEG or WebP; up to 5 MB)</label><input id="edit-banner" type="file" accept="image/png,image/jpeg,image/webp" /><label for="edit-visibility">Profile visibility</label><select id="edit-visibility"><option value="public" ${currentProfile.profile_visibility !== "private" ? "selected" : ""}>Public</option><option value="private" ${currentProfile.profile_visibility === "private" ? "selected" : ""}>Private</option></select><div class="form-actions"><button class="button primary" type="submit">Save changes</button><button class="button secondary" type="button" data-action="cancel-edit">Cancel</button></div></form>`;
   container.querySelector('[data-action="cancel-edit"]').addEventListener("click", () => { container.innerHTML = ""; });
   container.querySelector("#profile-edit-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1238,27 +1302,45 @@ function renderProfileEditor(container) {
       country_code: String(form.get("country_code")),
       profile_visibility: container.querySelector("#edit-visibility").value,
     };
-    const avatar = container.querySelector("#edit-avatar").files[0];
-    if (avatar) {
-      if (!["image/png", "image/jpeg", "image/webp"].includes(avatar.type) || avatar.size > 5 * 1024 * 1024) {
+    const imageUploads = [
+      { input: container.querySelector("#edit-avatar"), key: "avatar_path", prefix: "avatar", label: "Avatar" },
+      { input: container.querySelector("#edit-banner"), key: "banner_path", prefix: "banner", label: "Profile banner" },
+    ];
+    for (const image of imageUploads) {
+      const file = image.input.files[0];
+      if (file && (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024)) {
         submit.disabled = false;
         submit.textContent = "Save changes";
-        setNotice(container.querySelector("#profile-error"), "Choose a PNG, JPEG or WebP image smaller than 5 MB.");
+        setNotice(container.querySelector("#profile-error"), `${image.label}: choose a PNG, JPEG or WebP image smaller than 5 MB.`);
         return;
       }
-      const extension = ({ "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" })[avatar.type];
-      const path = `${currentUser.id}/avatar-${crypto.randomUUID()}.${extension}`;
-      const upload = await supabase.storage.from("gamehub-avatars").upload(path, avatar, { contentType: avatar.type, upsert: false });
+    }
+    const uploadedPaths = [];
+    for (const image of imageUploads) {
+      const file = image.input.files[0];
+      if (!file) continue;
+      const extension = ({ "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" })[file.type];
+      const path = `${currentUser.id}/${image.prefix}-${crypto.randomUUID()}.${extension}`;
+      const upload = await supabase.storage.from("gamehub-avatars").upload(path, file, { contentType: file.type, upsert: false });
       if (upload.error) {
+        if (uploadedPaths.length) {
+          const { error: cleanupError } = await supabase.storage.from("gamehub-avatars").remove(uploadedPaths);
+          if (cleanupError) console.error("Uploaded profile images could not be cleaned up:", cleanupError.message);
+        }
         submit.disabled = false;
         submit.textContent = "Save changes";
-        setNotice(container.querySelector("#profile-error"), `Avatar upload failed: ${upload.error.message}`);
+        setNotice(container.querySelector("#profile-error"), `${image.label} upload failed: ${upload.error.message}`);
         return;
       }
-      updates.avatar_path = path;
+      uploadedPaths.push(path);
+      updates[image.key] = path;
     }
     const { error } = await supabase.from("profiles").update(updates).eq("id", currentUser.id);
     if (error) {
+      if (uploadedPaths.length) {
+        const { error: cleanupError } = await supabase.storage.from("gamehub-avatars").remove(uploadedPaths);
+        if (cleanupError) console.error("Uploaded profile images could not be cleaned up:", cleanupError.message);
+      }
       submit.disabled = false;
       submit.textContent = "Save changes";
       setNotice(container.querySelector("#profile-error"), `We couldn't save your changes: ${error.message}`);
@@ -1290,14 +1372,14 @@ async function renderDiscover(content) {
 }
 
 async function loadPlayers(container, search) {
-  const base = supabase.from("profiles").select("id, username, display_name, bio, country_code, avatar_path").not("onboarding_completed_at", "is", null).neq("id", currentUser.id).order("created_at", { ascending: false }).limit(24);
+  const base = supabase.from("profiles").select("id, username, display_name, bio, country_code, avatar_path, profile_cosmetic_key").not("onboarding_completed_at", "is", null).neq("id", currentUser.id).order("created_at", { ascending: false }).limit(24);
   let data;
   let error;
   if (search.trim()) {
   const term = search.trim();
   const [byUsername, byName] = await Promise.all([
     base.ilike("username", `%${term}%`),
-    supabase.from("profiles").select("id, username, display_name, bio, country_code, avatar_path").not("onboarding_completed_at", "is", null).neq("id", currentUser.id).ilike("display_name", `%${term}%`).order("created_at", { ascending: false }).limit(24),
+    supabase.from("profiles").select("id, username, display_name, bio, country_code, avatar_path, profile_cosmetic_key").not("onboarding_completed_at", "is", null).neq("id", currentUser.id).ilike("display_name", `%${term}%`).order("created_at", { ascending: false }).limit(24),
   ]);
   error = byUsername.error || byName.error;
   data = [...new Map([...(byUsername.data || []), ...(byName.data || [])].map((profile) => [profile.id, profile])).values()].slice(0, 24);
@@ -1321,7 +1403,7 @@ async function loadPlayers(container, search) {
   const requestedIds = new Set((friends.data || []).map((row) => row.sender_id === currentUser.id ? row.recipient_id : row.sender_id));
   container.innerHTML = data.map((profile) => {
     const avatar = profile.avatar_path ? supabase.storage.from("gamehub-avatars").getPublicUrl(profile.avatar_path).data.publicUrl : "";
-    return `<article class="player-card"><span class="avatar">${avatar ? `<img src="${escapeHtml(avatar)}" alt="" />` : escapeHtml(initials(profile.display_name))}</span><div class="player-card-copy"><h3>${escapeHtml(profile.display_name)}</h3><p class="player-handle">@${escapeHtml(profile.username)}</p><p class="player-bio">${escapeHtml(profile.bio || "Ready to meet fellow gamers.")}</p><small>${escapeHtml(countryName(profile.country_code))}</small><div class="card-actions"><button class="button secondary compact" data-social="follow" data-user="${profile.id}">${followedIds.has(profile.id) ? "Following" : "Follow"}</button><button class="button secondary compact" data-social="friend" data-user="${profile.id}" ${requestedIds.has(profile.id) ? "disabled" : ""}>${requestedIds.has(profile.id) ? "Request sent" : "Add friend"}</button><button class="button secondary compact" data-social="message" data-user="${profile.id}">Message</button><button class="button secondary compact" data-social="call" data-call-type="voice" data-user="${profile.id}" ${liveKitServerUrl ? "" : "disabled"}>Voice call</button><button class="button secondary compact" data-social="call" data-call-type="video" data-user="${profile.id}" ${liveKitServerUrl ? "" : "disabled"}>Video call</button><button class="text-button" data-social="block" data-user="${profile.id}">${blockedIds.has(profile.id) ? "Unblock" : "Block"}</button><button class="text-button" data-social="report" data-user="${profile.id}">Report</button></div></div></article>`;
+    return `<article class="player-card"><span class="avatar ${profileCosmeticClass(profile.profile_cosmetic_key)}">${avatar ? `<img src="${escapeHtml(avatar)}" alt="" />` : escapeHtml(initials(profile.display_name))}</span><div class="player-card-copy"><h3>${escapeHtml(profile.display_name)}</h3><p class="player-handle">@${escapeHtml(profile.username)}</p><p class="player-bio">${escapeHtml(profile.bio || "Ready to meet fellow gamers.")}</p><small>${escapeHtml(countryName(profile.country_code))}</small><div class="card-actions"><button class="button secondary compact" data-social="follow" data-user="${profile.id}">${followedIds.has(profile.id) ? "Following" : "Follow"}</button><button class="button secondary compact" data-social="friend" data-user="${profile.id}" ${requestedIds.has(profile.id) ? "disabled" : ""}>${requestedIds.has(profile.id) ? "Request sent" : "Add friend"}</button><button class="button secondary compact" data-social="message" data-user="${profile.id}">Message</button><button class="button secondary compact" data-social="call" data-call-type="voice" data-user="${profile.id}" ${liveKitServerUrl ? "" : "disabled"}>Voice call</button><button class="button secondary compact" data-social="call" data-call-type="video" data-user="${profile.id}" ${liveKitServerUrl ? "" : "disabled"}>Video call</button><button class="text-button" data-social="block" data-user="${profile.id}">${blockedIds.has(profile.id) ? "Unblock" : "Block"}</button><button class="text-button" data-social="report" data-user="${profile.id}">Report</button></div></div></article>`;
   }).join("");
   container.querySelectorAll("[data-social]").forEach((control) => control.addEventListener("click", () => handleSocialAction(control, container)));
 }
@@ -1345,8 +1427,7 @@ async function handleSocialAction(control, container) {
     error = result.error;
     if (!error) {
       selectedConversationId = result.data;
-      activePage = "messages";
-      renderPage();
+      navigateToAppPage("messages");
       return;
     }
   } else if (social === "call") {
@@ -1362,8 +1443,7 @@ async function handleSocialAction(control, container) {
       error = callError;
     } else {
       selectedConversationId = null;
-      activePage = "calls";
-      renderPage();
+      navigateToAppPage("calls");
       await connectToCall(callId, control.dataset.callType === "video", control.dataset.callType);
       return;
     }
@@ -2352,8 +2432,8 @@ async function renderNotifications(content) {
     }
     await renderNotifications(content);
   }));
-  list.querySelectorAll('[data-page="teams"]').forEach((control) => control.addEventListener("click", () => { activePage = "teams"; renderPage(); }));
-  list.querySelectorAll('[data-page="calls"]').forEach((control) => control.addEventListener("click", () => { activePage = "calls"; renderPage(); }));
+  list.querySelectorAll('[data-page="teams"]').forEach((control) => control.addEventListener("click", () => navigateToAppPage("teams")));
+  list.querySelectorAll('[data-page="calls"]').forEach((control) => control.addEventListener("click", () => navigateToAppPage("calls")));
   content.querySelector('[data-action="mark-all-read"]').addEventListener("click", async () => {
     const { error } = await supabase.from("notifications").update({ read_at: new Date().toISOString() }).eq("user_id", currentUser.id).is("read_at", null);
     if (error) return renderDataError(list, error, () => renderNotifications(content));
@@ -2482,7 +2562,7 @@ async function renderSettings(content) {
 }
 
 async function renderMarketplace(content) {
-  content.innerHTML = `${pageHeader("OPTIONAL EXTRAS", "Marketplace.", "Marketplace purchases are coming soon. No payment will be collected; community features remain free.")}<div id="credit-balance" class="notice success"></div><div id="market-products" class="community-grid"><div class="skeleton-card"></div></div><div class="section-heading"><div><p class="eyebrow">ORDERS</p><h2>Your purchases</h2></div></div><div id="order-history" class="post-list"></div>`;
+  content.innerHTML = `${pageHeader("OPTIONAL EXTRAS", "Marketplace.", "Optional digital items. Community features remain free.")}<div id="credit-balance" class="notice success"></div><div id="market-products" class="community-grid"><div class="skeleton-card"></div></div><div class="section-heading"><div><p class="eyebrow">ORDERS</p><h2>Your purchases</h2></div></div><div id="order-history" class="post-list"></div>`;
   const [ledger, products, orders] = await Promise.all([
     supabase.from("credit_ledger_entries").select("amount").eq("user_id", currentUser.id),
     supabase.from("products").select("id, name, description, product_type, price_minor, currency_code, credit_amount").eq("active", true).order("created_at", { ascending: false }).limit(50),
@@ -2494,7 +2574,7 @@ async function renderMarketplace(content) {
   const balance = (ledger.data || []).reduce((total, entry) => total + entry.amount, 0);
   content.querySelector("#credit-balance").textContent = `Credit balance: ${balance} GH credits`;
   const productContainer = content.querySelector("#market-products");
-  productContainer.innerHTML = products.data.length ? products.data.map((product) => `<article class="community-card"><small>${escapeHtml(product.product_type.replace("_", " "))}</small><h3>${escapeHtml(product.name)}</h3><p>${escapeHtml(product.description)}</p>${product.credit_amount ? `<span class="muted-small">${product.credit_amount} credits</span>` : ""}<div class="card-actions"><strong>${formatMoney(product.price_minor, product.currency_code)}</strong><button class="button secondary compact" type="button" disabled aria-disabled="true">Coming soon</button></div></article>`).join("") : `<div class="empty-state"><h2>No marketplace items yet</h2><p>The catalog will appear here when items are ready. Marketplace purchases are coming soon.</p></div>`;
+  productContainer.innerHTML = products.data.length ? products.data.map((product) => `<article class="community-card"><small>${escapeHtml(product.product_type.replace("_", " "))}</small><h3>${escapeHtml(product.name)}</h3><p>${escapeHtml(product.description)}</p>${product.credit_amount ? `<span class="muted-small">${product.credit_amount} credits</span>` : ""}<div class="card-actions"><strong>${formatMoney(product.price_minor, product.currency_code)}</strong><button class="button secondary compact" type="button" data-buy-product="${product.id}">Purchase</button></div><div class="notice" role="alert" data-purchase-error hidden></div></article>`).join("") : `<div class="empty-state"><h2>No marketplace items available</h2><p>There are no active items in the catalog.</p></div>`;
   productContainer.querySelectorAll("[data-buy-product]").forEach((control) => control.addEventListener("click", async () => {
     if (!window.confirm("Continue to Paystack to complete this purchase?")) return;
     control.disabled = true;
@@ -2510,7 +2590,8 @@ async function renderMarketplace(content) {
       window.location.assign(result.authorizationUrl);
     } catch (error) {
       control.disabled = false;
-      return renderDataError(productContainer, error, () => renderMarketplace(content));
+      const notice = control.closest(".community-card").querySelector("[data-purchase-error]");
+      setNotice(notice, `Purchase unavailable: ${error.message}. Your account has not been charged.`);
     }
   }));
   content.querySelector("#order-history").innerHTML = orders.data.length ? orders.data.map((order) => `<article class="post-card"><div class="post-head"><strong>${escapeHtml(order.order_items?.[0]?.products?.name || "Digital order")}</strong><span class="status-tag">${escapeHtml(order.status)}</span></div><p>${escapeHtml(formatMoney(order.total_minor, order.currency_code))} · ${escapeHtml(datePart(order.created_at, { dateStyle: "medium" }))}</p></article>`).join("") : `<p class="muted-small">No purchases yet.</p>`;
@@ -2559,7 +2640,7 @@ async function renderAdmin(content) {
     content.innerHTML = `<div class="empty-state"><h2>Restricted area</h2><p>Moderator permissions are required.</p></div>`;
     return;
   }
-  content.innerHTML = `${pageHeader("PLATFORM OPERATIONS", "Moderation queue.", "Review reports and submissions. Every action is recorded.")}<div id="admin-error" class="notice" hidden></div><div class="section-heading"><div><p class="eyebrow">REPORTS</p><h2>Player reports</h2></div></div><div id="admin-reports" class="post-list"></div><div class="section-heading"><div><p class="eyebrow">STREAM REPORTS</p><h2>Reported streams</h2></div></div><div id="admin-stream-reports" class="post-list"></div><div class="section-heading"><div><p class="eyebrow">STREAMS</p><h2>Unverified streams</h2></div></div><div id="admin-streams" class="post-list"></div><div class="section-heading"><div><p class="eyebrow">TOURNAMENTS</p><h2>Prize claims</h2></div></div><div id="admin-prizes" class="post-list"></div><div class="section-heading"><div><p class="eyebrow">MARKETPLACE</p><h2>Products</h2></div></div><form id="product-form" class="edit-card"><div id="product-error" class="notice" hidden></div><label for="product-name">Name</label><input id="product-name" name="name" maxlength="120" required /><label for="product-description">Description</label><textarea id="product-description" name="description" maxlength="2000" rows="3"></textarea><label for="product-type">Product type</label><select id="product-type" name="product_type"><option value="cosmetic">One-time cosmetic</option><option value="credit_pack">Credits pack</option></select><label for="product-price">Price (KES)</label><input id="product-price" name="price" type="number" min="1" max="1000000" step="1" required /><div id="cosmetic-entitlement"><label for="entitlement-key">Entitlement key</label><input id="entitlement-key" name="entitlement_key" maxlength="120" /></div><div id="credit-amount-field" hidden><label for="credit-amount">Credits to grant after verified payment</label><input id="credit-amount" name="credit_amount" type="number" min="1" max="100000" /></div><label class="check-label"><input name="active" type="checkbox" /><span>Publish this product</span></label><button class="button primary" type="submit">Create product</button></form><div id="product-list" class="community-grid"></div>`;
+  content.innerHTML = `${pageHeader("PLATFORM OPERATIONS", "Moderation queue.", "Review reports and submissions. Every action is recorded.")}<div id="admin-error" class="notice" hidden></div><div class="section-heading"><div><p class="eyebrow">REPORTS</p><h2>Player reports</h2></div></div><div id="admin-reports" class="post-list"></div><div class="section-heading"><div><p class="eyebrow">STREAM REPORTS</p><h2>Reported streams</h2></div></div><div id="admin-stream-reports" class="post-list"></div><div class="section-heading"><div><p class="eyebrow">STREAMS</p><h2>Unverified streams</h2></div></div><div id="admin-streams" class="post-list"></div><div class="section-heading"><div><p class="eyebrow">TOURNAMENTS</p><h2>Prize claims</h2></div></div><div id="admin-prizes" class="post-list"></div><div class="section-heading"><div><p class="eyebrow">MARKETPLACE</p><h2>Products</h2></div></div><form id="product-form" class="edit-card"><div id="product-error" class="notice" hidden></div><label for="product-name">Name</label><input id="product-name" name="name" maxlength="120" required /><label for="product-description">Description</label><textarea id="product-description" name="description" maxlength="2000" rows="3"></textarea><label for="product-type">Product type</label><select id="product-type" name="product_type"><option value="cosmetic">One-time cosmetic</option><option value="credit_pack">Credits pack</option></select><label for="product-price">Price (KES)</label><input id="product-price" name="price" type="number" min="1" max="1000000" step="1" required /><div id="cosmetic-entitlement"><label for="entitlement-key">Cosmetic style</label><select id="entitlement-key" name="entitlement_key"><option value="frame-ember">Ember frame</option><option value="frame-gold">Gold frame</option><option value="frame-neon">Neon frame</option></select></div><div id="credit-amount-field" hidden><label for="credit-amount">Credits to grant after verified payment</label><input id="credit-amount" name="credit_amount" type="number" min="1" max="100000" /></div><label class="check-label"><input name="active" type="checkbox" /><span>Publish this product</span></label><button class="button primary" type="submit">Create product</button></form><div id="product-list" class="community-grid"></div>`;
   const [reports, streams, prizes, streamReports] = await Promise.all([
     supabase.from("reports").select("id, reporter_id, reported_user_id, resource_type, resource_id, reason, status, created_at").eq("status", "open").order("created_at", { ascending: true }).limit(50),
     supabase.from("streams").select("id, title, game, provider, url, user_id, created_at").eq("status", "unverified").order("created_at", { ascending: true }).limit(50),
@@ -2711,6 +2792,10 @@ async function showAuthenticatedApp() {
       renderPublicRoute();
       return;
     }
+    const hashPage = window.location.hash.slice(1).split("?")[0];
+    if (navigation.some(([key]) => key === hashPage) || hashPage === "admin") {
+      activePage = hashPage;
+    }
     renderApp();
     await handlePaymentReturn();
   } catch (error) {
@@ -2760,7 +2845,7 @@ window.addEventListener("hashchange", (event) => {
   if (["sign-in", "register"].includes(page) && publicNavigation.some(([key]) => key === previousHash) === false && longPublicPages[previousHash]) {
     sessionStorage.setItem("gamehub-auth-return", previousHash);
   }
-  if (currentUser && publicNavigation.some(([key]) => key === page)) {
+  if (currentUser && (publicNavigation.some(([key]) => key === page) || page === "admin")) {
     activePage = page;
     renderApp();
   } else {
@@ -2822,7 +2907,7 @@ if (!isSupabaseConfigured) {
     }
 
     function renderPasswordRecovery() {
-      app.innerHTML = `<main class="onboarding-wrap"><section class="onboarding-card"><p class="eyebrow">ACCOUNT SECURITY</p><h1>Choose a new password.</h1><p class="muted">Use at least 8 characters for your new password.</p><div id="recovery-notice" class="notice" role="alert" hidden></div><form id="recovery-form"><label for="new-password">New password</label><input id="new-password" type="password" minlength="8" autocomplete="new-password" required /><label for="confirm-password">Confirm new password</label><input id="confirm-password" type="password" minlength="8" autocomplete="new-password" required /><button class="button primary full" type="submit">Update password</button></form></section></main>`;
+      app.innerHTML = `<main class="onboarding-wrap"><section class="onboarding-card"><p class="eyebrow">ACCOUNT SECURITY</p><h1>Choose a new password.</h1><p class="muted">Use at least 8 characters for your new password.</p><div id="recovery-notice" class="notice" role="alert" hidden></div><form id="recovery-form"><label for="new-password">New password</label><div class="password-control"><input id="new-password" type="password" minlength="8" autocomplete="new-password" required /><button class="text-button" type="button" data-action="toggle-password" aria-controls="new-password" aria-pressed="false">Show</button></div><label for="confirm-password">Confirm new password</label><div class="password-control"><input id="confirm-password" type="password" minlength="8" autocomplete="new-password" required /><button class="text-button" type="button" data-action="toggle-password" aria-controls="confirm-password" aria-pressed="false">Show</button></div><button class="button primary full" type="submit">Update password</button></form></section></main>`;
       document.querySelector("#recovery-form").addEventListener("submit", async (event) => {
         event.preventDefault();
         const password = document.querySelector("#new-password").value;
@@ -2876,6 +2961,13 @@ if (!isSupabaseConfigured) {
         button.textContent = "Continue with Google";
         setNotice(document.querySelector("#auth-notice"), authErrorMessage(error));
       }
+    } else if (action === "toggle-password") {
+      const toggle = event.target.closest("button");
+      const input = document.getElementById(toggle.getAttribute("aria-controls"));
+      const isVisible = input.type === "text";
+      input.type = isVisible ? "password" : "text";
+      toggle.textContent = isVisible ? "Show" : "Hide";
+      toggle.setAttribute("aria-pressed", String(!isVisible));
     } else if (action === "toggle-auth") {
       isSignUp = !isSignUp;
       renderAuth();
@@ -2884,6 +2976,8 @@ if (!isSupabaseConfigured) {
       document.querySelector("#auth-submit").textContent = isSignUp ? "Create account" : "Continue with email";
       document.querySelector('[data-action="toggle-auth"]').textContent = isSignUp ? "Already a member? Sign in" : "New here? Create account";
       document.querySelector("#password").autocomplete = isSignUp ? "new-password" : "current-password";
+      document.querySelector("#password-confirmation").hidden = !isSignUp;
+      document.querySelector("#confirm-password").required = isSignUp;
     } else if (action === "reset-password") {
       const email = document.querySelector("#email").value.trim();
       if (!email) {

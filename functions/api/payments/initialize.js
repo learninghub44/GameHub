@@ -2,7 +2,7 @@ import { authenticatedUser, configuration, json, serviceFetch, validUuid } from 
 
 export async function onRequestPost({ request, env }) {
   if (env.MARKETPLACE_PURCHASES_ENABLED !== "true") {
-    return json({ error: "Marketplace purchases are coming soon." }, 503);
+    return json({ error: "Marketplace checkout is disabled for this deployment." }, 503);
   }
 
   let user;

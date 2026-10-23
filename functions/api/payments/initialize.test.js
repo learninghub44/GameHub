@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { onRequestPost } from "./initialize.js";
 
-test("marketplace checkout is unavailable unless explicitly enabled", async () => {
+test("marketplace checkout is disabled unless explicitly enabled", async () => {
   const originalFetch = globalThis.fetch;
   let fetchCalled = false;
   globalThis.fetch = async () => {
@@ -15,7 +15,7 @@ test("marketplace checkout is unavailable unless explicitly enabled", async () =
       env: {},
     });
     assert.equal(response.status, 503);
-    assert.deepEqual(await response.json(), { error: "Marketplace purchases are coming soon." });
+    assert.deepEqual(await response.json(), { error: "Marketplace checkout is disabled for this deployment." });
     assert.equal(fetchCalled, false);
   } finally {
     globalThis.fetch = originalFetch;
